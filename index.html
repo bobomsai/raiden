@@ -2076,18 +2076,42 @@ function drawPBullets() {
 }
 
 /* ================= 敵彈 ================= */
-function eShot(x, y, ang, spd, big) {
-  if (eBullets.length > 450) return;
+/* 敵彈種類：每種花樣有不同顏色/形狀，方便辨識
+   orb 橘色圓彈 / big 粉紅大彈 / needle 黃白針彈(狙擊) / rice 青色米粒(螺旋) / ring 綠色空心環(環形)
+   wall 紫色菱形(彈牆) / accel 藍色加速彈 / star 紅色碎彈(爆裂) / shell 灰色砲彈(定時爆開) */
+const BKIND = {
+  orb: { g: 'rgba(255,90,40,0.5)', c: '#ffb040', s: 'dot', r: 4 },
+  big: { g: 'rgba(255,60,140,0.5)', c: '#ff6ac0', s: 'dot', r: 6 },
+  needle: { g: 'rgba(255,235,110,0.5)', c: '#fff4a8', s: 'line', r: 3, len: 8, w: 3.4 },
+  rice: { g: 'rgba(60,220,255,0.5)', c: '#a8f6ff', s: 'line', r: 3.5, len: 4.5, w: 5 },
+  ring: { g: 'rgba(70,255,140,0.5)', c: '#9affb8', s: 'hollow', r: 5 },
+  wall: { g: 'rgba(190,90,255,0.55)', c: '#e6c0ff', s: 'diamond', r: 5 },
+  accel: { g: 'rgba(70,130,255,0.55)', c: '#b0c8ff', s: 'line', r: 4, len: 6, w: 5 },
+  star: { g: 'rgba(255,40,70,0.5)', c: '#ff8a9a', s: 'dot', r: 3.5 },
+  shell: { g: 'rgba(255,60,40,0.35)', c: '#5a5a62', s: 'shell', r: 7 }
+};
+const EB_CAP = 400;
+function eShot(x, y, ang, spd, big, kind) {
+  if (eBullets.length > EB_CAP) return null;
   spd *= (G && G.bspd) || 1;
-  eBullets.push({ x, y, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd, r: big ? 6 : 4, big: !!big, t: 0 });
+  const k = kind || (big ? 'big' : 'orb'), K = BKIND[k];
+  const b = { x, y, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd, r: K.r, big: k === 'big', kind: k, t: 0 };
+  eBullets.push(b);
+  return b;
 }
 function aimAng(x, y) { return Math.atan2(player.y - y, player.x - x); }
-function aimShot(x, y, spd, spread, n, big) {
+function aimShot(x, y, spd, spread, n, big, kind) {
   const a = aimAng(x, y); n = n || 1; spread = spread || 0;
-  for (let i = 0; i < n; i++) eShot(x, y, a + (i - (n - 1) / 2) * spread, spd, big);
+  for (let i = 0; i < n; i++) eShot(x, y, a + (i - (n - 1) / 2) * spread, spd, big, kind);
 }
-function ring(x, y, n, spd, off, big) { for (let i = 0; i < n; i++) eShot(x, y, (off || 0) + i * TAU / n, spd, big); }
+function ring(x, y, n, spd, off, big, kind) { for (let i = 0; i < n; i++) eShot(x, y, (off || 0) + i * TAU / n, spd, big, kind || (big ? 'big' : 'ring')); }
 
+function burstBullet(b) {
+  const n = b.burst.n, k = b.burst.kind || 'star', off = Math.random() * TAU;
+  if (dist2(b.x, b.y, player.x, player.y) < 60 * 60) return; // 太靠近玩家就不爆，避免無法閃避
+  for (let i = 0; i < n; i++) eShot(b.x, b.y, off + i * TAU / n, b.burst.spd, false, k);
+  spark(b.x, b.y, 6, '#ff8060', 120);
+}
 function updateEBullets(dt) {
   const p = player;
   for (let i = eBullets.length - 1; i >= 0; i--) {
@@ -2098,6 +2122,15 @@ function updateEBullets(dt) {
       const na = a + clamp(angDiff(a, aimAng(b.x, b.y)), -1.6 * dt, 1.6 * dt);
       b.vx = Math.cos(na) * sp; b.vy = Math.sin(na) * sp;
     }
+    if (b.acc) { // 加速彈：由慢到快
+      const sp = Math.hypot(b.vx, b.vy) || 1, ns = Math.min(b.vmax, sp + b.acc * dt);
+      b.vx *= ns / sp; b.vy *= ns / sp;
+    }
+    if (b.drag) { const f = Math.max(0, 1 - b.drag * dt); b.vx *= f; b.vy *= f; }
+    if (b.fuse !== undefined) {
+      b.fuse -= dt;
+      if (b.fuse <= 0) { eBullets.splice(i, 1); if (b.burst) burstBullet(b); continue; }
+    }
     b.x += b.vx * dt; b.y += b.vy * dt; b.t += dt;
     if (b.x < -20 || b.x > W + 20 || b.y < -20 || b.y > H + 20) { eBullets.splice(i, 1); continue; }
     if (p.alive && p.inv <= 0 && !(p.entering > 0)) {
@@ -2106,18 +2139,73 @@ function updateEBullets(dt) {
     }
   }
 }
+const _bk = {};
 function drawEBullets() {
-  ctx.save(); ctx.globalCompositeOperation = 'lighter';
-  for (const b of eBullets) {
-    const pulse = 1 + Math.sin(b.t * 20) * 0.15;
-    ctx.fillStyle = b.big ? 'rgba(255,60,140,0.5)' : 'rgba(255,90,40,0.5)';
-    ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 1.7 * pulse, 0, TAU); ctx.fill();
+  for (const k in BKIND) (_bk[k] || (_bk[k] = [])).length = 0;
+  for (const b of eBullets) _bk[b.kind || (b.big ? 'big' : 'orb')].push(b);
+  const t = (G && G.t) || 0, pulse = 1 + Math.sin(t * 20) * 0.15;
+  // 光暈
+  ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+  for (const k in BKIND) {
+    const L = _bk[k]; if (!L.length) continue; const K = BKIND[k];
+    if (K.s === 'line') {
+      ctx.strokeStyle = K.g; ctx.lineWidth = K.w * 2.4; ctx.beginPath();
+      for (const b of L) { const sp = Math.hypot(b.vx, b.vy) || 1, ux = b.vx / sp * K.len, uy = b.vy / sp * K.len; ctx.moveTo(b.x - ux, b.y - uy); ctx.lineTo(b.x + ux, b.y + uy); }
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = K.g; ctx.beginPath();
+      const rr = K.r * (K.s === 'shell' ? 2.2 : 1.7) * pulse;
+      for (const b of L) { ctx.moveTo(b.x + rr, b.y); ctx.arc(b.x, b.y, rr, 0, TAU); }
+      ctx.fill();
+    }
   }
   ctx.restore();
-  for (const b of eBullets) {
-    ctx.fillStyle = b.big ? '#ff6ac0' : '#ffb040'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 0.5, 0, TAU); ctx.fill();
+  // 本體
+  ctx.save(); ctx.lineCap = 'round';
+  for (const k in BKIND) {
+    const L = _bk[k]; if (!L.length) continue; const K = BKIND[k];
+    if (K.s === 'line') {
+      ctx.strokeStyle = K.c; ctx.lineWidth = K.w; ctx.beginPath();
+      for (const b of L) { const sp = Math.hypot(b.vx, b.vy) || 1, ux = b.vx / sp * K.len, uy = b.vy / sp * K.len; ctx.moveTo(b.x - ux, b.y - uy); ctx.lineTo(b.x + ux, b.y + uy); }
+      ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = K.w * 0.4; ctx.beginPath();
+      for (const b of L) { const sp = Math.hypot(b.vx, b.vy) || 1, ux = b.vx / sp * K.len * 0.7, uy = b.vy / sp * K.len * 0.7; ctx.moveTo(b.x - ux, b.y - uy); ctx.lineTo(b.x + ux, b.y + uy); }
+      ctx.stroke();
+    } else if (K.s === 'hollow') {
+      ctx.strokeStyle = K.c; ctx.lineWidth = 2.6; ctx.beginPath();
+      for (const b of L) { ctx.moveTo(b.x + K.r, b.y); ctx.arc(b.x, b.y, K.r, 0, TAU); }
+      ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.beginPath();
+      for (const b of L) { ctx.moveTo(b.x + 1.6, b.y); ctx.arc(b.x, b.y, 1.6, 0, TAU); }
+      ctx.fill();
+    } else if (K.s === 'diamond') {
+      const R = K.r + 1.5;
+      ctx.fillStyle = K.c; ctx.beginPath();
+      for (const b of L) { ctx.moveTo(b.x, b.y - R); ctx.lineTo(b.x + R, b.y); ctx.lineTo(b.x, b.y + R); ctx.lineTo(b.x - R, b.y); ctx.closePath(); }
+      ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.beginPath();
+      for (const b of L) { ctx.moveTo(b.x, b.y - 2.2); ctx.lineTo(b.x + 2.2, b.y); ctx.lineTo(b.x, b.y + 2.2); ctx.lineTo(b.x - 2.2, b.y); ctx.closePath(); }
+      ctx.fill();
+    } else if (K.s === 'shell') {
+      for (const b of L) {
+        circ(b.x, b.y, K.r, '#4a4a52'); circ(b.x - 2, b.y - 2, K.r * 0.45, '#8a8a96');
+        const blink = b.fuse !== undefined && Math.floor(b.fuse * (b.fuse < 0.6 ? 16 : 6)) % 2 === 0;
+        circ(b.x, b.y, 2.6, blink ? '#ff3020' : '#701810');
+        if (b.fuse !== undefined && b.fuse < 0.7) { // 爆炸預告圈
+          ctx.strokeStyle = 'rgba(255,80,60,' + (0.8 - b.fuse) + ')'; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(b.x, b.y, 10 + (0.7 - b.fuse) * 40, 0, TAU); ctx.stroke();
+        }
+      }
+    } else {
+      ctx.fillStyle = K.c; ctx.beginPath();
+      for (const b of L) { ctx.moveTo(b.x + b.r, b.y); ctx.arc(b.x, b.y, b.r, 0, TAU); }
+      ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.beginPath();
+      for (const b of L) { ctx.moveTo(b.x + b.r * 0.5, b.y); ctx.arc(b.x, b.y, b.r * 0.5, 0, TAU); }
+      ctx.fill();
+    }
   }
+  ctx.restore();
 }
 
 /* ================= 道具 ================= */
@@ -2331,7 +2419,7 @@ UPD.fighter = function (e, dt) {
   e.ang = Math.atan2(e.vy, e.vx || 0.0001);
   e.fireT -= dt;
   if (e.fireT <= 0 && canFire(e)) {
-    if (e.shots > 0) { aimShot(e.x, e.y + 8, 170); e.shots--; }
+    if (e.shots > 0) { if (e.pattern === 'stop' && CUR_STAGE >= 2) aimShot(e.x, e.y + 8, 175, 0.22, 3, false, 'needle'); else aimShot(e.x, e.y + 8, 185, 0, 1, false, 'needle'); e.shots--; }
     e.fireT = 1.3;
   }
 };
@@ -2446,8 +2534,10 @@ UPD.gunship = function (e, dt) {
     e.fireT -= dt;
     if (e.fireT <= 0 && canFire(e)) {
       e.shotN++;
-      if (e.shotN % 3 === 0) ring(e.x, e.y + 10, 12, 120, e.t);
-      else { aimShot(e.x - 20, e.y + 20, 175, 0.18, 3); aimShot(e.x + 20, e.y + 20, 175, 0.18, 3); }
+      const m = e.shotN % 4;
+      if (m === 0) ring(e.x, e.y + 10, 12 + CUR_STAGE, 120, e.t);
+      else if (m === 2 && CUR_STAGE >= 2) accelRing(e.x, e.y + 10, 10 + CUR_STAGE * 2, e.t);
+      else { const n = CUR_STAGE >= 3 ? 5 : 3; aimShot(e.x - 20, e.y + 20, 175, 0.16, n); aimShot(e.x + 20, e.y + 20, 175, 0.16, n); }
       e.fireT = 1.35;
     }
     if (e.t > e.stay) e.phase = 2;
@@ -2488,13 +2578,18 @@ UPD.midboss = function (e, dt) {
   if (e.phase === 0) { e.y += 70 * dt; if (e.y >= 130) { e.phase = 1; e.t = 0; e.invuln = false; } return; }
   if (e.phase === 2) { e.y -= 60 * dt; e.invuln = true; if (e.y < -120) e.dead = true, (e.persistent = false); return; }
   e.x = W / 2 + Math.sin(e.t * 0.5) * 110; e.y = 130 + Math.sin(e.t * 0.9) * 12;
-  e.patT += dt; e.fireT -= dt;
-  if (e.patT > 5) { e.patT = 0; e.pat = (e.pat + 1) % 3; e.fireT = 0.6; }
+  // 依血量切換：>60% 針彈+投彈 / 60~30% 米粒螺旋+環 / <30% 大扇形+追蹤飛彈
+  const hp = e.hp / e.maxHp, np = hp > 0.6 ? 0 : hp > 0.3 ? 1 : 2;
+  if (np !== e.pat) { e.pat = np; e.fireT = 0.8; addShake(6); SFX.play('alarm'); spark(e.x, e.y, 16, '#fff', 200); }
+  e.fireT -= dt;
   if (e.fireT <= 0 && player.alive) {
-    if (e.pat === 0) { aimShot(e.x - 50, e.y + 10, 200, 0.12, 3); aimShot(e.x + 50, e.y + 10, 200, 0.12, 3); e.fireT = 0.9; }
-    else if (e.pat === 1) { e.spin += 0.32; for (let k = 0; k < 4; k++) eShot(e.x, e.y + 20, e.spin + k * TAU / 4, 140); e.fireT = 0.11; }
-    else { aimShot(e.x, e.y + 25, 160, 0.16, 9, true); e.fireT = 1.3; }
+    if (e.pat === 0) { aimShot(e.x - 50, e.y + 10, 205, 0.12, 3, false, 'needle'); aimShot(e.x + 50, e.y + 10, 205, 0.12, 3, false, 'needle'); e.fireT = 1.0; }
+    else if (e.pat === 1) { e.spin += 0.32; for (let k = 0; k < 4; k++) eShot(e.x, e.y + 20, e.spin + k * TAU / 4, 140, false, 'rice'); e.fireT = 0.12; }
+    else { aimShot(e.x, e.y + 25, 160, 0.16, 9, true); e.fireT = 1.4; }
   }
+  if (player.alive && e.pat === 0 && every(e, 'sh', 2.4, dt)) { shellDrop(e.x - 34, e.y + 20, 160, 1.2, 6); shellDrop(e.x + 34, e.y + 20, 160, 1.2, 6); }
+  if (player.alive && e.pat === 1 && every(e, 'rg', 2.8, dt)) ring(e.x, e.y + 20, 14, 115, e.t);
+  if (player.alive && e.pat === 2 && every(e, 'ms', 3.2, dt)) { missile(e.x - 60, e.y + 10, Math.PI / 2 + 0.7, 90); missile(e.x + 60, e.y + 10, Math.PI / 2 - 0.7, 90); }
   if (e.t > 32) e.phase = 2;
   if (e.hp < e.maxHp * 0.4 && Math.random() < 0.3) particles.push({ t: 'smoke', x: e.x + rand(-50, 50), y: e.y + rand(-10, 10), vx: 0, vy: 40, life: 0.8, max: 0.8, size: 8 });
 };
@@ -2533,7 +2628,7 @@ function spawnBoss() {
   }
   const core = b.parts[4];
   core.dmgMul = () => (b.parts[0].dead && b.parts[1].dead) ? 1 : 0.5;
-  core.onDeath = () => { b.dying = 3.2; for (const p of b.parts) if (!p.dead) { p.dead = true; explode(p.x, p.y, 30); } eBullets.length = 0; };
+  core.onDeath = () => { b.dying = 3.2; for (const p of b.parts) if (!p.dead) { p.dead = true; explode(p.x, p.y, 30); } clearHostiles(); };
   boss = b;
   return b;
 }
@@ -2689,7 +2784,7 @@ UPD.heli = function (e, dt) {
   if (e.phase === 0) { e.y += 130 * dt; if (e.y >= e.stopY) { e.phase = 1; e.t = 0; } }
   else if (e.phase === 1) {
     e.x += clamp(player.x - e.x, -40, 40) * dt; e.y += Math.sin(e.t * 2) * 10 * dt;
-    if (every(e, 'f', 1.7, dt) && canFire(e)) for (let k = 0; k < 3; k++) later(k * 0.12, () => { if (!e.dead) aimShot(e.x, e.y + 14, 175); });
+    if (every(e, 'f', 1.7, dt) && canFire(e)) for (let k = 0; k < 3; k++) later(k * 0.12, () => { if (!e.dead) aimShot(e.x, e.y + 14, 195, 0, 1, false, 'needle'); });
     if (e.t > e.stay) e.phase = 2;
   } else { e.x += e.dir * 160 * dt; e.y -= 40 * dt; }
 };
@@ -2762,7 +2857,7 @@ UPD.launcher = function (e, dt) {
   e.y += G.scrollSpeed * dt;
   e.ta += clamp(angDiff(e.ta, aimAng(e.x, e.y)), -1 * dt, 1 * dt);
   if (every(e, 'f', 2.8, dt) && canFire(e)) {
-    for (const s of [-1, 1]) { eShot(e.x + s * 8, e.y, e.ta + s * 0.5, 115, true); eBullets[eBullets.length - 1].home = 1.1; }
+    for (const s of [-1, 1]) missile(e.x + s * 8, e.y, e.ta + s * 0.5, 100);
   }
 };
 DRW.launcher = function (e) {
@@ -2844,7 +2939,7 @@ DRW.sub = function (e) {
 };
 
 /* ---- 太空水雷（擊破時放射子彈） ---- */
-function mine(x, o) { return mkEnemy('mine', x, -20, Object.assign({ hp: 6, r: 13, score: 300, size: 22, x0: x, onDeath: (e) => { if (!e.lastBomb && G.bombT <= 0 && e.y < player.y - 60) ring(e.x, e.y, 8, 85, e.t); } }, o)); }
+function mine(x, o) { return mkEnemy('mine', x, -20, Object.assign({ hp: 6, r: 13, score: 300, size: 22, x0: x, onDeath: (e) => { if (!e.lastBomb && G.bombT <= 0 && e.y < player.y - 60) ring(e.x, e.y, 8, 85, e.t, false, 'star'); } }, o)); }
 UPD.mine = function (e, dt) { e.y += 55 * dt; e.x = e.x0 + Math.sin(e.t * 1.3) * 30; };
 DRW.mine = function (e) {
   drawAir(e, () => {
@@ -2859,7 +2954,7 @@ function satellite(x, o) { return mkEnemy('satellite', x, -30, Object.assign({ h
 UPD.satellite = function (e, dt) {
   if (e.phase === 0) { e.y += 100 * dt; if (e.y >= e.stopY) { e.phase = 1; e.t = 0; } }
   else if (e.phase === 1) {
-    if (e.t > 0.6 && e.t < 4.5 && canFire(e) && every(e, 'f', 0.16, dt)) { e.spin += 0.35; for (let k = 0; k < 3; k++) eShot(e.x, e.y, e.spin + k * TAU / 3, 125); }
+    if (e.t > 0.6 && e.t < 4.5 && canFire(e) && every(e, 'f', 0.16, dt)) { e.spin += 0.35; for (let k = 0; k < 3; k++) eShot(e.x, e.y, e.spin + k * TAU / 3, 125, false, 'rice'); }
     if (e.t > 5.5) e.phase = 2;
   } else e.y -= 90 * dt;
 };
@@ -2901,7 +2996,7 @@ DRW.mid = function (e) {
 /* =============== 通用多部位 BOSS =============== */
 function spawnGBoss(def) {
   const b = mkEnemy('gboss', W / 2, def.y0 || -190, { hp: 1, r: 0, collide: false, score: 0, size: 0, phase: 0, persistent: true, parts: [], def, name: def.name,
-    spin: 0, spin2: 0, dying: 0, cycle: 0, boss: true, ground: !!def.ground });
+    spin: 0, spin2: 0, dying: 0, cycle: 0, boss: true, ground: !!def.ground, form: 1, fscale: (def.scale && def.scale[1]) || 1, morphT: -1, mk: 1, flying: [] });
   for (const pd of def.parts) {
     const p = mkEnemy('bosspart', b.x + pd.ox, b.y + pd.oy, Object.assign({ kind: 'turret', size: 24, score: 3000, r: 14 }, pd, { parent: b, invuln: true, persistent: true, boss: true, ta: Math.PI / 2, ground: !!def.ground, noDecal: !!def.noDecal }));
     p.maxHp = p.hp;
@@ -2914,7 +3009,7 @@ function spawnGBoss(def) {
   core.onDeath = () => {
     b.dying = def.deathTime || 3.2;
     for (const p of b.parts) if (!p.dead) { p.dead = true; explode(p.x, p.y, 30); }
-    eBullets.length = 0; beams.length = 0;
+    clearHostiles();
   };
   boss = b;
   return b;
@@ -2923,7 +3018,8 @@ function BP(b, name) { const p = b.parts.find((q) => q.name === name); return p 
 function reveal(b, name) { const p = b.parts.find((q) => q.name === name); if (p && p.hidden) { p.hidden = false; p.collide = true; p.invuln = false; spark(p.x, p.y, 20, '#fff', 200); } }
 UPD.gboss = function (b, dt) {
   const d = b.def, P = b.parts;
-  const place = () => { for (const p of P) { p.x = b.x + p.ox; p.y = b.y + p.oy; } };
+  const place = () => { const s = b.fscale || 1; for (const p of P) { p.x = b.x + p.ox * s; p.y = b.y + p.oy * s; } };
+  updateFlying(b, dt);
   if (b.dying > 0) {
     b.dying -= dt; b.y += 12 * dt;
     const sw = d.w || 130, sh = d.h || 70;
@@ -2941,12 +3037,13 @@ UPD.gboss = function (b, dt) {
   if (b.phase === 0) {
     b.y += (d.enterSpd || 55) * dt;
     if (b.y >= d.enterY) { b.y = d.enterY; b.phase = 1; b.t = 0; b.cycle = 0; for (const p of P) if (!p.hidden) p.invuln = false; }
-  } else d.move(b, dt);
+  } else if (b.morphT < 0) d.move(b, dt);
+  if (b.morphT >= 0) { updateMorph(b, dt); place(); return; }
   place();
   for (const p of P) if (p.kind !== 'core' && !p.fixed) p.ta += clamp(angDiff(p.ta, aimAng(p.x, p.y)), -2 * dt, 2 * dt);
   if (b.phase === 0 || !player.alive) return;
-  if (b.phase === 1 && d.toP2(b)) { b.phase = 2; b.cycle = 0; addShake(10); SFX.play('alarm'); if (d.onPhase) d.onPhase(b, 2); }
-  if (b.phase === 2 && d.toP3 && d.toP3(b)) { b.phase = 3; b.cycle = 0; addShake(12); SFX.play('alarm'); if (d.onPhase) d.onPhase(b, 3); }
+  if (b.phase === 1 && d.toP2(b)) { gbossPhase(b, 2); return; }
+  if (b.phase === 2 && d.toP3 && d.toP3(b)) { gbossPhase(b, 3); if (b.morphT >= 0) return; }
   b.cycle += dt;
   d.fire(b, dt);
   if (b.phase >= 3 && Math.random() < 0.25) particles.push({ t: 'smoke', x: b.x + rand(-(d.w || 120), d.w || 120), y: b.y + rand(-(d.h || 60), (d.h || 60) * 0.6), vx: 0, vy: 50, life: 0.9, max: 0.9, size: 10 });
@@ -2987,29 +3084,343 @@ function drawPart(p, b, pal) {
   FLASH = false; ctx.restore();
 }
 DRW.gboss = function (b) {
-  const d = b.def;
-  if (!d.ground) withShadow(() => { ctx.translate(b.x, b.y); d.hull(b, true); }, 30, 70, 0.8);
-  ctx.save(); ctx.translate(b.x, b.y); d.hull(b, false); ctx.restore();
+  const d = b.def, s = b.fscale || 1, morphing = b.morphT >= 0;
+  if (!d.ground) withShadow(() => { ctx.translate(b.x, b.y); ctx.scale(s, s); drawFormBack(b, d); d.hull(b, true); }, 30, 70, 0.8);
+  ctx.save(); ctx.translate(b.x, b.y); ctx.scale(s, s);
+  if (morphing && Math.floor(b.morphT * 16) % 3 === 0) FLASH = true;
+  drawFormBack(b, d); d.hull(b, false); drawFormFront(b, d);
+  FLASH = false; ctx.restore();
   for (const p of b.parts) drawPart(p, b, d.pal);
+  drawFlying(b);
+  if (morphing) drawMorphGlow(b, d);
 };
+
+/* ======== BOSS 變形系統 ======== */
+function gbossPhase(b, n) {
+  const d = b.def;
+  b.phase = n; b.cycle = 0; addShake(10); SFX.play('alarm');
+  if (d.onPhase) d.onPhase(b, n);
+  if (d.morph && d.morph[n]) startMorph(b, n);
+}
+function startMorph(b, n) {
+  const d = b.def, m = d.morph[n], s = b.fscale || 1;
+  b.morphT = 0; b.morphDur = m.dur || 1.35; b.morphTo = n; b.s0 = s; b.s1 = m.scale || s; b.mk = 0;
+  for (const p of b.parts) {
+    p.m0x = p.ox; p.m0y = p.oy; const f = p.f && p.f[n];
+    p.m1x = f ? f[0] : p.ox; p.m1y = f ? f[1] : p.oy;
+    if (!p.dead) p.invuln = true;
+  }
+  clearHostiles();
+  const pl = d.plates && d.plates[b.form];
+  if (pl) for (const r of pl) {
+    const lx = (r[0] + r[2] / 2) * s, ly = (r[1] + r[3] / 2) * s;
+    b.flying.push({ x: b.x + lx, y: b.y + ly, w: r[2] * s, h: r[3] * s, vx: lx * 2.2 + rand(-40, 40), vy: rand(-170, -60) + ly, rot: 0, vr: rand(-6, 6), life: 1.6 });
+    explode(b.x + lx, b.y + ly, 28);
+  }
+  flashScreen = Math.max(flashScreen, 0.7); addShake(18); SFX.play('exL');
+  floatText(b.x, b.y - 30, n >= 3 ? '!! FINAL FORM !!' : '— TRANSFORM —', '#ff80c0');
+}
+function updateMorph(b, dt) {
+  const d = b.def;
+  b.morphT += dt;
+  const k = Math.min(1, b.morphT / b.morphDur), e = k * k * (3 - 2 * k);
+  b.mk = e; b.fscale = lerp(b.s0, b.s1, e);
+  for (const p of b.parts) { p.ox = lerp(p.m0x, p.m1x, e); p.oy = lerp(p.m0y, p.m1y, e); }
+  const sw = d.w || 130, sh = d.h || 70;
+  if (Math.random() < 0.3) explode(b.x + rand(-sw, sw) * 0.8, b.y + rand(-sh, sh) * 0.8, rand(14, 26));
+  if (Math.random() < 0.5) spark(b.x + rand(-sw, sw), b.y + rand(-sh, sh), 3, '#ffd0ff', 160);
+  addShake(3);
+  if (k >= 1) {
+    b.morphT = -1; b.form = b.morphTo; b.mk = 1;
+    for (const p of b.parts) {
+      if (p.dead) continue;
+      if (p.hidden && p.appear === b.form) reveal(b, p.name);
+      else if (!p.hidden) p.invuln = false;
+    }
+    flashScreen = Math.max(flashScreen, 0.8); addShake(14); SFX.play('bomb');
+    explode(b.x, b.y, 60);
+  }
+}
+function updateFlying(b, dt) {
+  for (let i = b.flying.length - 1; i >= 0; i--) {
+    const f = b.flying[i]; f.life -= dt;
+    if (f.life <= 0) { b.flying.splice(i, 1); continue; }
+    f.vy += 420 * dt; f.x += f.vx * dt; f.y += f.vy * dt; f.rot += f.vr * dt;
+    if (Math.random() < 0.4) addP({ t: 'smoke', x: f.x, y: f.y, vx: 0, vy: 0, life: 0.5, max: 0.5, size: 6 });
+  }
+}
+function drawFlying(b) {
+  for (const f of b.flying) {
+    ctx.save(); ctx.globalAlpha = Math.min(1, f.life / 0.5); ctx.translate(f.x, f.y); ctx.rotate(f.rot);
+    rect(-f.w / 2, -f.h / 2, f.w, f.h, '#5c606a'); rect(-f.w / 2 + 2, -f.h / 2 + 2, f.w - 4, 3, '#9a9eaa');
+    rect(-f.w / 2, f.h / 2 - 3, f.w, 3, '#ff7030');
+    ctx.restore();
+  }
+}
+function drawPlates(list) {
+  for (const r of list) {
+    const [x, y, w, h] = r;
+    rect(x, y, w, h, '#50545e'); rect(x + 2, y + 2, w - 4, 3, '#8a8e9a'); rect(x, y + h - 3, w, 3, '#30333a');
+    circ(x + 4, y + h / 2, 1.6, '#24262c'); circ(x + w - 4, y + h / 2, 1.6, '#24262c');
+  }
+}
+/* 機翼 / 尖刺展開（u = 展開程度 0~1），畫在機體下層 */
+function drawFormBack(b, d) {
+  const to = b.morphT >= 0 ? b.morphTo : b.form, mk = b.morphT >= 0 ? b.mk : 1;
+  const u2 = b.form >= 2 ? 1 : to >= 2 ? mk : 0, u3 = b.form >= 3 ? 1 : to >= 3 ? mk : 0;
+  const w = d.wings;
+  if (w && u2 > 0) for (const sd of [-1, 1]) {
+    ctx.save(); ctx.translate(sd * w.x0, w.y0 || 0); ctx.scale(sd * u2, 0.4 + 0.6 * u2);
+    poly(w.pts, w.col); poly(w.inner, w.edge);
+    ctx.restore();
+  }
+}
+/* 裝甲板與攻擊型態的發光排氣口，畫在機體上層 */
+function drawFormFront(b, d) {
+  if (b.morphT < 0 && d.plates && d.plates[b.form]) drawPlates(d.plates[b.form]);
+  const sp = d.spikes, u3 = b.form >= 3 ? 1 : (b.morphT >= 0 && b.morphTo >= 3) ? b.mk : 0;
+  if (sp && u3 > 0) { // 尖刺冠：圍繞核心旋轉展開
+    const n = sp.n, rot = b.t * 0.6, cy = b.core ? b.core.oy : 0;
+    for (let i = 0; i < n * 2; i++) {
+      const a = rot + i * Math.PI / n, r0 = sp.r0, r1 = r0 + sp.len * u3 * (i % 2 ? 0.55 : 1);
+      poly([Math.cos(a - 0.16) * r0, cy + Math.sin(a - 0.16) * r0, Math.cos(a) * r1, cy + Math.sin(a) * r1, Math.cos(a + 0.16) * r0, cy + Math.sin(a + 0.16) * r0], i % 2 ? sp.col : sp.edge);
+    }
+  }
+  if (SHADOW) return;
+  if (b.form >= 2 && d.vents) {
+    const a = 0.45 + 0.35 * Math.sin(b.t * (b.form >= 3 ? 12 : 6));
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(255,60,90,' + a + ')';
+    ctx.beginPath(); for (const v of d.vents) { ctx.moveTo(v[0] + 7, v[1]); ctx.arc(v[0], v[1], 7, 0, TAU); } ctx.fill();
+    ctx.restore();
+  }
+}
+function drawMorphGlow(b, d) {
+  const k = b.mk, R = (d.w || 130) * (0.6 + k * 0.8);
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, R);
+  g.addColorStop(0, 'rgba(255,220,255,' + (0.55 * (1 - k * 0.5)) + ')'); g.addColorStop(0.5, 'rgba(255,90,200,0.25)'); g.addColorStop(1, 'rgba(120,0,160,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y, R, 0, TAU); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,180,255,' + (0.8 - k * 0.6) + ')'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(b.x, b.y, R * (0.3 + k * 0.9), 0, TAU); ctx.stroke();
+  // 電弧
+  ctx.strokeStyle = 'rgba(200,220,255,0.8)'; ctx.lineWidth = 1.5; ctx.beginPath();
+  for (let i = 0; i < 4; i++) {
+    let x = b.x, y = b.y; const a = rand(0, TAU); ctx.moveTo(x, y);
+    for (let j = 0; j < 5; j++) { x += Math.cos(a) * R * 0.15 + rand(-10, 10); y += Math.sin(a) * R * 0.12 + rand(-10, 10); ctx.lineTo(x, y); }
+  }
+  ctx.stroke();
+  ctx.restore();
+}
 UPD.bosspart = UPD.bosspart || function () {};
+
+</script>
+<script>
+/* 多樣化敵人攻擊：彈幕花樣小工具 + 新敵種（追蹤飛彈、轟炸機、自殺機、雷射無人機、彈牆艦、定時水雷） */
+'use strict';
+
+/* ---------- 彈幕花樣 ---------- */
+function fanK(x, y, n, spd, spread, kind) { aimShot(x, y, spd, spread, n, kind === 'big', kind); }
+function accelRing(x, y, n, off, v0, vmax, kind) { // 由慢加速的環形彈
+  for (let i = 0; i < n; i++) { const b = eShot(x, y, (off || 0) + i * TAU / n, v0 || 45, false, kind || 'accel'); if (b) { b.acc = 150; b.vmax = (vmax || 190) * ((G && G.bspd) || 1); } }
+}
+function needleBurst(src, n, gap, spd, ox, oy) {
+  for (let k = 0; k < n; k++) later(k * gap, () => { if (!src.dead && player.alive) aimShot(src.x + (ox || 0), src.y + (oy || 10), spd, 0, 1, false, 'needle'); });
+}
+/* 彈牆：橫跨整個畫面的菱形彈，只留一個缺口 */
+function wallGap(y, gapX, gapW, spd) {
+  gapX = clamp(gapX, gapW / 2 + 10, W - gapW / 2 - 10);
+  for (let x = 12; x < W; x += 26) if (Math.abs(x - gapX) > gapW / 2) eShot(x, y, Math.PI / 2, spd, false, 'wall');
+  spark(gapX, y, 4, '#e0b0ff', 60);
+}
+/* 定時爆裂砲彈 */
+function shellDrop(x, y, vy, fuse, n, kind) {
+  const b = eShot(x, y, Math.PI / 2, vy, false, 'shell');
+  if (b) { b.drag = 1.1; b.fuse = fuse; b.burst = { n, spd: 95, kind: kind || 'star' }; }
+  return b;
+}
+/* 花瓣：多層錯開的米粒環 */
+function flower(x, y, n, layers, off) {
+  for (let l = 0; l < layers; l++) for (let i = 0; i < n; i++) eShot(x, y, (off || 0) + i * TAU / n + l * 0.08, 95 + l * 28, false, l % 2 ? 'rice' : 'ring');
+}
+/* 清除所有敵彈、光束、飛彈與水雷（BOSS 擊破 / 變形時） */
+function clearHostiles() {
+  for (const b of eBullets) if (Math.random() < 0.3) spark(b.x, b.y, 1, '#aef', 80);
+  eBullets.length = 0; beams.length = 0;
+  for (const e of enemies) if (e.hostileMinor && !e.dead) { e.dead = true; spark(e.x, e.y, 4, '#ffd860', 100); }
+}
+function countType(t) { let n = 0; for (const e of enemies) if (e.type === t && !e.dead) n++; return n; }
+
+/* ---------- 追蹤飛彈（可擊落、時間到自爆） ---------- */
+function missile(x, y, ang, spd, o) {
+  if (countType('missile') >= 12) return null;
+  return mkEnemy('missile', x, y, Object.assign({ hp: 2, r: 8, score: 50, size: 12, ang, spd: spd || 100, life: 4.2, turn: 1.7, hostileMinor: true }, o));
+}
+UPD.missile = function (e, dt) {
+  e.life -= dt;
+  if (e.life <= 0) { e.dead = true; spark(e.x, e.y, 6, '#ffb060', 90); return; }
+  if (e.t > 0.35 && player.alive) e.ang += clamp(angDiff(e.ang, aimAng(e.x, e.y)), -e.turn * dt, e.turn * dt);
+  e.spd = Math.min(210, e.spd + 40 * dt);
+  e.x += Math.cos(e.ang) * e.spd * dt; e.y += Math.sin(e.ang) * e.spd * dt;
+  if (Math.random() < 0.6) addP({ t: 'smoke', x: e.x - Math.cos(e.ang) * 8, y: e.y - Math.sin(e.ang) * 8, vx: 0, vy: 0, life: 0.35, max: 0.35, size: 3 });
+};
+DRW.missile = function (e) {
+  ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(e.ang); FLASH = e.flash > 0;
+  const blink = e.life < 1 && Math.floor(e.life * 10) % 2 === 0;
+  ctx.fillStyle = 'rgba(255,170,60,' + (0.5 + Math.random() * 0.4) + ')'; ctx.beginPath(); ctx.arc(-9, 0, 4 + Math.random() * 2, 0, TAU); ctx.fill();
+  poly([10, 0, 4, -3, -7, -3, -7, 3, 4, 3], blink ? '#ffffff' : '#d8d8e0');
+  poly([-4, -3, -9, -7, -9, -3], '#c03028'); poly([-4, 3, -9, 7, -9, 3], '#c03028');
+  circ(7, 0, 2, '#ff3030');
+  FLASH = false; ctx.restore();
+};
+
+/* ---------- 轟炸機（投下定時爆裂砲彈） ---------- */
+function bomber(fromLeft, y, o) {
+  return mkEnemy('bomber', fromLeft ? -60 : W + 60, y, Object.assign({ hp: 38 + CUR_STAGE * 6, r: 26, score: 3000, size: 44, dir: fromLeft ? 1 : -1, drop: 'medal' }, o));
+}
+UPD.bomber = function (e, dt) {
+  e.x += e.dir * 58 * dt; e.y += 6 * dt;
+  if (e.x > 30 && e.x < W - 30 && canFire(e) && every(e, 'sh', 1.25 - CUR_STAGE * 0.07, dt)) shellDrop(e.x, e.y + 16, 150, 1.25, 6 + CUR_STAGE);
+  if (CUR_STAGE >= 3 && canFire(e) && every(e, 'n', 2.2, dt)) needleBurst(e, 2, 0.12, 200, 0, 20);
+};
+DRW.bomber = function (e) {
+  const sk = SKINS[(CUR_STAGE - 1) * 2] || SKINS[0];
+  drawAir(e, () => {
+    ctx.translate(e.x, e.y);
+    poly([-50, -2, -12, -10, 12, -10, 50, -2, 50, 6, 12, 4, -12, 4, -50, 6], sk[1]);
+    ctx.fillStyle = C(sk[0]); ctx.beginPath(); ctx.ellipse(0, 0, 11, 30, 0, 0, TAU); ctx.fill();
+    poly([-18, -26, 18, -26, 14, -20, -14, -20], sk[1]);
+    rect(-6, 12, 12, 10, '#2a2a30');
+    for (const ox of [-34, -20, 20, 34]) { rect(ox - 3, -4, 6, 12, '#3a3a40'); }
+    circ(0, 20, 4, '#60c0e0');
+    if (!SHADOW) { ctx.fillStyle = Math.floor(e.t * 4) % 2 ? '#ff4040' : '#601010'; ctx.fillRect(-50, 0, 3, 3); ctx.fillRect(47, 0, 3, 3); }
+  }, [18, 34]);
+};
+
+/* ---------- 自殺突擊機（預警線後高速衝撞） ---------- */
+function kamikaze(x, o) {
+  return mkEnemy('kamikaze', x, -24, Object.assign({ hp: 3, r: 12, score: 400, size: 20, st: 0, stopY: rand(70, 150), lockT: 0.75 }, o));
+}
+UPD.kamikaze = function (e, dt) {
+  if (e.st === 0) { e.y += 170 * dt; e.ang = Math.PI / 2; if (e.y >= e.stopY) { e.st = 1; e.t = 0; } }
+  else if (e.st === 1) {
+    e.ang = aimAng(e.x, e.y); e.tx = player.x; e.ty = player.y; e.x += Math.sin(e.t * 30) * 0.6;
+    if (e.t > e.lockT) { e.st = 2; e.t = 0; const a = Math.atan2(e.ty - e.y, e.tx - e.x); e.vx = Math.cos(a); e.vy = Math.sin(a); e.ang = a; SFX.play('hit'); }
+  } else {
+    const sp = Math.min(470, 180 + e.t * 900);
+    e.x += e.vx * sp * dt; e.y += e.vy * sp * dt;
+    if (Math.random() < 0.8) addP({ t: 'spark', x: e.x - e.vx * 12, y: e.y - e.vy * 12, vx: -e.vx * 60, vy: -e.vy * 60, life: 0.25, max: 0.25, col: '#ff8040', size: 2.5 });
+  }
+};
+DRW.kamikaze = function (e) {
+  if (e.st === 1 && !SHADOW) { // 預警線
+    ctx.save(); ctx.setLineDash([8, 6]); ctx.strokeStyle = 'rgba(255,60,60,' + (0.35 + 0.35 * Math.sin(e.t * 30)) + ')'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(e.x + (e.tx - e.x) * 1.6, e.y + (e.ty - e.y) * 1.6); ctx.stroke(); ctx.restore();
+  }
+  drawAir(e, () => {
+    ctx.translate(e.x, e.y); ctx.rotate(e.ang - Math.PI / 2);
+    poly([0, 16, 10, -6, 14, -12, 4, -8, 0, -14, -4, -8, -14, -12, -10, -6], e.st === 1 && Math.floor(e.t * 12) % 2 ? '#ffffff' : '#c82828');
+    poly([0, 10, 4, -4, -4, -4], '#ffd040');
+    circ(0, -10, 3, '#ff9030');
+  }, [12, 22]);
+};
+
+/* ---------- 雷射無人機（預警線 → 直射光束） ---------- */
+function laserDrone(x, o) {
+  return mkEnemy('laserdrone', x, -24, Object.assign({ hp: 9 + CUR_STAGE * 2, r: 14, score: 900, size: 24, st: 0, stopY: rand(80, 140), dir: x < W / 2 ? -1 : 1 }, o));
+}
+UPD.laserdrone = function (e, dt) {
+  if (e.st === 0) { e.y += 120 * dt; if (e.y >= e.stopY) { e.st = 1; e.t = 0; } }
+  else if (e.st === 1) {
+    if (!e.fired && e.t > 0.3 && player.alive) { e.fired = true; beam(e.x, e.y + 14, 26, 1.05, 0.9, e); }
+    if (e.t > 2.6) e.st = 2;
+  } else { e.y -= 90 * dt; e.x += e.dir * 70 * dt; }
+};
+DRW.laserdrone = function (e) {
+  drawAir(e, () => {
+    ctx.translate(e.x, e.y);
+    poly([-16, -6, -6, -12, 6, -12, 16, -6, 10, 8, -10, 8], '#3a4250');
+    rect(-18, -4, 6, 10, '#5a6474'); rect(12, -4, 6, 10, '#5a6474');
+    const ch = e.st === 1 && e.t < 1.35 ? Math.min(1, e.t / 1.35) : 0;
+    circ(0, 6, 6, '#20242c'); circ(0, 6, 3 + ch * 3, e.st === 1 ? '#ff5080' : '#803040');
+  }, [12, 24]);
+};
+
+/* ---------- 彈牆艦（發射有缺口的彈牆） ---------- */
+function wallShip(x, o) {
+  return mkEnemy('wallship', x, -40, Object.assign({ hp: 30 + CUR_STAGE * 6, r: 22, score: 2200, size: 38, st: 0, stopY: rand(70, 110), waves: 0, drop: 'medal' }, o));
+}
+UPD.wallship = function (e, dt) {
+  if (e.st === 0) { e.y += 100 * dt; if (e.y >= e.stopY) { e.st = 1; e.t = 0; } }
+  else if (e.st === 1) {
+    e.x += Math.sin(e.t * 1.2) * 20 * dt;
+    if (e.t > 0.6 && canFire(e) && every(e, 'w', 1.7, dt)) {
+      e.waves++; const gx = clamp(player.x + rand(-80, 80), 60, W - 60);
+      wallGap(e.y + 24, gx, 84 - CUR_STAGE * 3, 92);
+    }
+    if (e.waves >= 3 + (CUR_STAGE >= 4 ? 1 : 0)) e.st = 2;
+  } else e.y -= 80 * dt;
+};
+DRW.wallship = function (e) {
+  drawAir(e, () => {
+    ctx.translate(e.x, e.y);
+    poly([-36, -10, -20, -20, 20, -20, 36, -10, 30, 14, -30, 14], '#4a3a64');
+    poly([-28, -8, -16, -14, 16, -14, 28, -8, 24, 8, -24, 8], '#6a5490');
+    for (let k = -3; k <= 3; k++) circ(k * 9, 14, 3, Math.floor(e.t * 6 + k) % 2 ? '#e0b0ff' : '#7040a0');
+    circ(0, -4, 6, '#2a1a3a'); circ(0, -4, 3, '#d090ff');
+  }, [16, 30]);
+};
+
+/* ---------- 定時水雷（時間到自行爆成環形彈，提早擊破即可避免） ---------- */
+function tmine(x, o) {
+  return mkEnemy('tmine', x, -20, Object.assign({ hp: 7, r: 13, score: 350, size: 22, x0: x, fuse: rand(2.8, 3.6), hostileMinor: true }, o));
+}
+UPD.tmine = function (e, dt) {
+  e.y += 50 * dt; e.x = e.x0 + Math.sin(e.t * 1.1) * 20;
+  e.fuse -= dt;
+  if (e.fuse <= 0 || e.y > player.y - 130) {
+    e.dead = true;
+    if (e.y > 10 && dist2(e.x, e.y, player.x, player.y) > 90 * 90) { ring(e.x, e.y, 10 + CUR_STAGE * 2, 100, e.t, false, 'star'); explode(e.x, e.y, 18); }
+    else spark(e.x, e.y, 8, '#ff8060', 100);
+  }
+};
+DRW.tmine = function (e) {
+  if (e.fuse < 1 && !SHADOW) { ctx.strokeStyle = 'rgba(255,60,80,' + (1 - e.fuse) * 0.8 + ')'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(e.x, e.y, 14 + (1 - e.fuse) * 36, 0, TAU); ctx.stroke(); }
+  drawAir(e, () => {
+    ctx.translate(e.x, e.y); ctx.rotate(e.t * 2.5);
+    for (let k = 0; k < 6; k++) { const a = k * TAU / 6; poly([Math.cos(a) * 18, Math.sin(a) * 18, Math.cos(a + 0.3) * 10, Math.sin(a + 0.3) * 10, Math.cos(a - 0.3) * 10, Math.sin(a - 0.3) * 10], '#b06040'); }
+    circ(0, 0, 10, '#4a2a2a');
+    const f = e.fuse < 1 ? 14 : 4;
+    circ(0, 0, 5, Math.floor(e.t * f) % 2 ? '#ff3040' : '#601018');
+  }, [10, 22]);
+};
+
+/* ---------- 編隊小工具 ---------- */
+function kamiSet(n, gap) { wave(n, gap || 0.35, (i) => kamikaze(clamp(player.x + (i % 2 ? 1 : -1) * rand(60, 160), 40, W - 40))); }
+function tmines(n) { for (let i = 0; i < n; i++) later(i * 0.45, () => tmine(50 + (W - 100) * (i + 0.5) / n)); }
 
 </script>
 <script>
 /* 第 2〜5 關中BOSS與BOSS定義 */
 'use strict';
 function fan(x, y, n, spd, spread, big) { aimShot(x, y, spd, spread, n, big); }
-function spiralShots(b, x, y, arms, spd, step, key) { b[key] = (b[key] || 0) + step; for (let k = 0; k < arms; k++) eShot(x, y, b[key] + k * TAU / arms, spd); }
-function stream(src, n, gap, spd) { for (let k = 0; k < n; k++) later(k * gap, () => { if (!src.dead && player.alive) aimShot(src.x, src.y + 10, spd, 0, 1, true); }); }
-function homing(x, y, ang, spd) { eShot(x, y, ang, spd, true); eBullets[eBullets.length - 1].home = 1.0; }
+function spiralShots(b, x, y, arms, spd, step, key, kind) { b[key] = (b[key] || 0) + step; for (let k = 0; k < arms; k++) eShot(x, y, b[key] + k * TAU / arms, spd, false, kind || 'rice'); }
+function stream(src, n, gap, spd) { for (let k = 0; k < n; k++) later(k * gap, () => { if (!src.dead && player.alive) aimShot(src.x, src.y + 10, spd, 0, 1, false, 'needle'); }); }
+function homing(x, y, ang, spd) { missile(x, y, ang, spd); }
 
 /* ================= 中BOSS ================= */
 const MID2 = { name: 'SAND CRAWLER', hp: 600, r: 46, size: 70, ground: true, stopY: 150, enterSpd: 60, time: 34,
   move(e, dt) { e.x = W / 2 + Math.sin(e.t * 0.4) * 90; e.y = 150 + Math.sin(e.t * 0.8) * 10; },
   fire(e, dt) {
-    if (every(e, 'a', 1.1, dt)) { fan(e.x - 38, e.y + 20, 3, 175, 0.16); fan(e.x + 38, e.y + 20, 3, 175, 0.16); }
-    if (every(e, 'b', 3.0, dt)) ring(e.x, e.y, 16, 115, e.t);
-    if (every(e, 'c', 4.4, dt)) fan(e.x, e.y + 40, 7, 150, 0.17, true);
+    if (e.hp > e.maxHp * 0.5) {   // 前半：雙三向扇形 + 環形 + 大扇形
+      if (every(e, 'a', 1.1, dt)) { fan(e.x - 38, e.y + 20, 3, 175, 0.16); fan(e.x + 38, e.y + 20, 3, 175, 0.16); }
+      if (every(e, 'b', 3.0, dt)) ring(e.x, e.y, 16, 115, e.t);
+      if (every(e, 'c', 4.4, dt)) fan(e.x, e.y + 40, 7, 150, 0.17, true);
+    } else {                      // 後半：彈牆 + 追蹤飛彈 + 針彈連射
+      if (every(e, 'w', 3.2, dt)) wallGap(e.y + 70, player.x + rand(-70, 70), 90, 90);
+      if (every(e, 'm', 3.6, dt)) { missile(e.x - 38, e.y + 20, Math.PI / 2 + 0.6, 95); missile(e.x + 38, e.y + 20, Math.PI / 2 - 0.6, 95); }
+      if (every(e, 'n', 1.6, dt)) needleBurst(e, 3, 0.1, 215, 0, 40);
+    }
   },
   draw(e) {
     rect(-60, -70, 120, 140, 'rgba(0,0,0,0.3)');
@@ -3026,8 +3437,13 @@ const MID3 = { name: 'ARMORED AIRSHIP', hp: 700, r: 48, size: 70, stopY: 140, en
   move(e, dt) { e.x = W / 2 + Math.sin(e.t * 0.45) * 100; e.y = 140 + Math.sin(e.t * 0.9) * 12; },
   fire(e, dt) {
     if (every(e, 'a', 0.9, dt)) { for (const s of [-1, 1]) for (let k = 0; k < 3; k++) eShot(e.x + s * 44, e.y + 10, Math.PI / 2 - s * (0.5 + k * 0.25), 150); }
-    if ((e.t % 8) > 4 && every(e, 'b', 0.12, dt)) spiralShots(e, e.x, e.y + 30, 2, 140, 0.3, 'sp');
-    if (every(e, 'c', 2.6, dt)) fan(e.x, e.y + 60, 5, 185, 0.12, true);
+    if (e.hp > e.maxHp * 0.5) {   // 前半：米粒螺旋 + 五向扇形
+      if ((e.t % 8) > 4 && every(e, 'b', 0.12, dt)) spiralShots(e, e.x, e.y + 30, 2, 140, 0.3, 'sp');
+      if (every(e, 'c', 2.6, dt)) fan(e.x, e.y + 60, 5, 185, 0.12, true);
+    } else {                      // 後半：雙雷射夾擊 + 加速環
+      if (every(e, 'bm', 4.0, dt)) { const px = clamp(player.x, 40, W - 40); beam(clamp(px - 70, 20, W - 20), e.y + 70, 30, 1.1, 0.9); beam(clamp(px + 70, 20, W - 20), e.y + 70, 30, 1.1, 0.9); }
+      if (every(e, 'ac', 2.4, dt)) accelRing(e.x, e.y + 30, 16, e.t);
+    }
   },
   draw(e) {
     for (const s of [-1, 1]) poly([s * 18, -80, s * 44, -100, s * 44, -82, s * 26, -66], '#5a5e68');
@@ -3042,8 +3458,14 @@ const MID4 = { name: 'AIRCRAFT CARRIER', hp: 800, r: 54, size: 80, ground: true,
   move(e, dt) { e.x = W / 2 + Math.sin(e.t * 0.3) * 70; e.y = 170 + Math.sin(e.t * 0.5) * 8; },
   fire(e, dt) {
     if (every(e, 'a', 3.0, dt)) { fighter(e.x - 20, e.y + 60, 'dive', { turnY: e.y + 120, shots: 0, color: 1, hp: 2 }); fighter(e.x + 20, e.y + 60, 'dive', { turnY: e.y + 120, shots: 0, color: 1, hp: 2 }); }
-    if (every(e, 'b', 1.0, dt)) for (const [ox, oy] of [[-44, -90], [44, -90], [-44, 70], [44, 70]]) aimShot(e.x + ox, e.y + oy, 175);
-    if (every(e, 'c', 3.4, dt)) ring(e.x, e.y, 18, 110, e.t);
+    if (e.hp > e.maxHp * 0.5) {   // 前半：四角砲 + 環形彈
+      if (every(e, 'b', 1.0, dt)) for (const [ox, oy] of [[-44, -90], [44, -90], [-44, 70], [44, 70]]) aimShot(e.x + ox, e.y + oy, 175);
+      if (every(e, 'c', 3.4, dt)) ring(e.x, e.y, 18, 110, e.t);
+    } else {                      // 後半：自殺機出擊 + 定時爆裂彈 + 追蹤飛彈
+      if (every(e, 'k', 2.6, dt)) kamikaze(e.x + rand(-40, 40), { stopY: e.y + 90 });
+      if (every(e, 'sh', 2.0, dt)) shellDrop(e.x + rand(-50, 50), e.y + 80, 150, 1.2, 10);
+      if (every(e, 'm', 3.0, dt)) { missile(e.x - 44, e.y + 70, Math.PI / 2 + 0.6, 95); missile(e.x + 44, e.y + 70, Math.PI / 2 - 0.6, 95); }
+    }
   },
   draw(e) {
     poly([0, -130, 48, -100, 58, 100, 40, 128, -40, 128, -58, 100, -48, -100], '#4a5260');
@@ -3058,9 +3480,15 @@ const MID5 = { name: 'TWIN ORBITER', hp: 900, r: 44, size: 70, stopY: 150, enter
   pods(e) { const a = e.t * 1.4; return [[e.x + Math.cos(a) * 70, e.y + Math.sin(a) * 40], [e.x - Math.cos(a) * 70, e.y - Math.sin(a) * 40]]; },
   fire(e, dt) {
     const pd = MID5.pods(e);
-    if (every(e, 'a', 0.14, dt)) { e.spin += 0.31; for (let i = 0; i < 2; i++) eShot(pd[i][0], pd[i][1], e.spin + i * Math.PI, 130); }
-    if (every(e, 'b', 1.8, dt)) fan(e.x, e.y + 30, 7, 175, 0.15, true);
-    if (every(e, 'c', 3.6, dt)) ring(e.x, e.y, 20, 105, e.t);
+    if (every(e, 'a', 0.14, dt)) { e.spin += 0.31; for (let i = 0; i < 2; i++) eShot(pd[i][0], pd[i][1], e.spin + i * Math.PI, 130, false, 'rice'); }
+    if (e.hp > e.maxHp * 0.5) {   // 前半：七向扇形 + 環形
+      if (every(e, 'b', 1.8, dt)) fan(e.x, e.y + 30, 7, 175, 0.15, true);
+      if (every(e, 'c', 3.6, dt)) ring(e.x, e.y, 20, 105, e.t);
+    } else {                      // 後半：花瓣彈 + 彈牆 + 雷射
+      if (every(e, 'fl', 2.6, dt)) flower(e.x, e.y, 12, 2, e.t);
+      if (every(e, 'w', 4.0, dt)) wallGap(e.y + 50, player.x + rand(-70, 70), 86, 92);
+      if (every(e, 'bm', 5.0, dt)) beam(clamp(player.x, 30, W - 30), e.y + 40, 30, 1.1, 0.9);
+    }
   },
   draw(e) {
     ctx.fillStyle = C('#3a2a4a'); ctx.beginPath(); ctx.ellipse(0, 0, 62, 40, 0, 0, TAU); ctx.fill();
@@ -3074,14 +3502,77 @@ const MID5 = { name: 'TWIN ORBITER', hp: 900, r: 44, size: 70, stopY: 150, enter
   } };
 
 /* ================= BOSS ================= */
+/* 第 1 關 BOSS：空中要塞（改用通用多部位引擎，支援變形） */
+const PAL1 = { ring: '#3a3d44', base: '#9a6040', mid: '#b87a50', light: '#d89a70', barrel: '#2a2a2e', core1: '#ff8040', core2: '#ff60a0', glow: '#ffd080' };
+const BOSS1 = { name: 'FLYING FORTRESS', enterY: 150, enterSpd: 55, y0: -170, w: 140, h: 70, pal: PAL1,
+  parts: [
+    { name: 'lc', ox: -100, oy: 26, hp: 150, r: 20, kind: 'cannon', score: 8000, size: 34, f: { 2: [-112, 40] } },
+    { name: 'rc', ox: 100, oy: 26, hp: 150, r: 20, kind: 'cannon', score: 8000, size: 34, f: { 2: [112, 40] } },
+    { name: 'lt', ox: -52, oy: -48, hp: 60, r: 13, kind: 'turret', score: 3000, f: { 2: [-62, -66] } },
+    { name: 'rt', ox: 52, oy: -48, hp: 60, r: 13, kind: 'turret', score: 3000, f: { 2: [62, -66] } },
+    { name: 'w1', ox: -168, oy: -6, hp: 90, r: 14, kind: 'turret', score: 4000, hidden: true, appear: 2 },
+    { name: 'w2', ox: 168, oy: -6, hp: 90, r: 14, kind: 'turret', score: 4000, hidden: true, appear: 2 },
+    { name: 'core', ox: 0, oy: 12, hp: 700, r: 25, kind: 'core', score: 50000, size: 50 }],
+  /* 形態1：裝甲要塞 → 形態2：裝甲板炸飛、後掠翼展開（翼端新砲塔）、機體放大 */
+  scale: [1, 1, 1.1], morph: { 2: { scale: 1.1 } },
+  plates: { 1: [[-48, -40, 36, 22], [12, -40, 36, 22], [-138, -6, 44, 20], [94, -6, 44, 20], [-36, 52, 72, 14]] },
+  wings: { x0: 138, y0: 0, pts: [0, -18, 40, -34, 62, -30, 48, 6, 30, 22, 0, 26], inner: [6, -12, 38, -26, 52, -22, 40, 4, 6, 18], col: '#5a606c', edge: '#e0a040' },
+  vents: [[-110, 40], [110, 40], [0, -60]],
+  armor: (b) => !!(BP(b, 'lc') || BP(b, 'rc')),
+  toP2: (b) => (!BP(b, 'lc') && !BP(b, 'rc')) || b.core.hp < b.core.maxHp * 0.6,
+  toP3: (b) => b.core.hp < b.core.maxHp * 0.3,
+  move(b, dt) { const amp = b.phase >= 2 ? 95 : 60; b.x = W / 2 + Math.sin(b.t * (b.phase >= 3 ? 0.55 : 0.4)) * amp; b.y = 150 + Math.sin(b.t * 0.7) * 14; },
+  fire(b, dt) {
+    const c = b.core, cx = c.x, cy = c.y + 18;
+    for (const n of ['lc', 'rc']) { const p = BP(b, n); if (p && every(p, 'f', b.phase >= 2 ? 1.3 : 1.7, dt)) for (let k = -1; k <= 1; k++) eShot(p.x + Math.cos(p.ta) * 26, p.y + Math.sin(p.ta) * 26, p.ta + k * 0.14, 185, true); }
+    for (const n of ['lt', 'rt']) { const p = BP(b, n); if (p && every(p, 'f', b.phase >= 3 ? 0.9 : 1.3, dt)) aimShot(p.x, p.y + 6, 210, 0, 1, false, 'needle'); }
+    if (b.phase === 1) {                                  // 形態1：環形彈
+      if (every(b, 'r', 2.6, dt)) ring(cx, cy, 14, 125, b.t * 0.7);
+    } else {
+      for (const n of ['w1', 'w2']) { const p = BP(b, n); if (p && every(p, 'f', 1.8, dt)) aimShot(p.x, p.y, 175, 0.2, 3); } // 翼端砲塔三向扇形
+      if (b.phase === 2) {                                // 形態2：米粒螺旋 ⇄ 定時爆裂彈
+        if (b.cycle % 7 < 3.2) { if (every(b, 's', 0.09, dt)) { b.spin += 0.23; eShot(cx, cy, b.spin, 145, false, 'rice'); eShot(cx, cy, b.spin + Math.PI, 145, false, 'rice'); } }
+        else if (every(b, 'sh', 1.1, dt)) shellDrop(cx + rand(-60, 60), cy, 170, 1.2, 8);
+      } else {                                            // 暴走：三臂螺旋 + 連射針彈 + 加速環
+        if (every(b, 's', 0.085, dt)) { b.spin += 0.19; for (let k = 0; k < 3; k++) eShot(cx, cy, b.spin + k * TAU / 3, 135, false, 'rice'); }
+        if (every(b, 'st', 1.7, dt)) stream(c, 5, 0.07, 265);
+        if (every(b, 'r', 3.2, dt)) accelRing(cx, cy, 18, Math.random());
+      }
+    }
+  },
+  hull(b, sh) {
+    poly([-60, -84, 60, -84, 92, -50, 140, -10, 150, 30, 120, 56, 60, 72, 30, 92, -30, 92, -60, 72, -120, 56, -150, 30, -140, -10, -92, -50], sh ? 'rgba(0,0,0,0.3)' : '#4c5058');
+    if (sh) return;
+    poly([-54, -76, 54, -76, 84, -46, 130, -8, 138, 26, 112, 48, 56, 62, 26, 82, -26, 82, -56, 62, -112, 48, -138, 26, -130, -8, -84, -46], '#6a707a');
+    poly([-40, -70, 40, -70, 56, -30, 50, 50, 20, 76, -20, 76, -50, 50, -56, -30], '#80868f');
+    ctx.strokeStyle = 'rgba(30,32,38,0.6)'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (const x of [-110, -80, 80, 110]) { ctx.moveTo(x, -20); ctx.lineTo(x, 50); }
+    ctx.moveTo(-130, 10); ctx.lineTo(130, 10); ctx.moveTo(-40, -40); ctx.lineTo(40, -40); ctx.moveTo(-50, 50); ctx.lineTo(50, 50);
+    ctx.stroke();
+    for (const x of [-120, -90, 90, 120]) rect(x - 7, 50, 14, 14, '#2e3036');
+    ctx.fillStyle = b.form >= 2 ? 'rgba(255,80,60,' + (0.6 + Math.random() * 0.4) + ')' : 'rgba(255,140,40,' + (0.6 + Math.random() * 0.4) + ')';
+    for (const x of [-120, -90, 90, 120]) { ctx.beginPath(); ctx.arc(x, 66, b.form >= 2 ? 7 : 5, 0, TAU); ctx.fill(); }
+    rect(-148, 18, 18, 8, '#c8302a'); rect(130, 18, 18, 8, '#c8302a');
+    rect(-6, -82, 12, 30, '#3a3d44');
+    for (let k = 0; k < 5; k++) rect(-34 + k * 15, -64, 8, 4, b.phase >= 3 && Math.floor(b.t * 6) % 2 ? '#ff4030' : '#e0c040');
+  } };
+
 const PAL2 = { ring: '#4a3a28', base: '#a07040', mid: '#c08a50', light: '#e0b080', barrel: '#2a2218', core1: '#ff8040', core2: '#ff4080' };
 const BOSS2 = { name: 'DESERT WALKER', ground: true, enterY: 165, enterSpd: 95, w: 130, h: 70, pal: PAL2,
   parts: [
-    { name: 'lc', ox: -92, oy: 18, hp: 170, r: 20, kind: 'cannon', score: 8000, size: 34 },
-    { name: 'rc', ox: 92, oy: 18, hp: 170, r: 20, kind: 'cannon', score: 8000, size: 34 },
-    { name: 'lp', ox: -46, oy: -50, hp: 90, r: 15, kind: 'pod', score: 4000, size: 26, fixed: true },
-    { name: 'rp', ox: 46, oy: -50, hp: 90, r: 15, kind: 'pod', score: 4000, size: 26, fixed: true },
-    { name: 'core', ox: 0, oy: 4, hp: 750, r: 26, kind: 'core', score: 50000, size: 50 }],
+    { name: 'lc', ox: -92, oy: 18, hp: 170, r: 20, kind: 'cannon', score: 8000, size: 34, f: { 2: [-104, 30] } },
+    { name: 'rc', ox: 92, oy: 18, hp: 170, r: 20, kind: 'cannon', score: 8000, size: 34, f: { 2: [104, 30] } },
+    { name: 'lp', ox: -46, oy: -50, hp: 90, r: 15, kind: 'pod', score: 4000, size: 26, fixed: true, f: { 2: [-64, -64] } },
+    { name: 'rp', ox: 46, oy: -50, hp: 90, r: 15, kind: 'pod', score: 4000, size: 26, fixed: true, f: { 2: [64, -64] } },
+    { name: 'm1', ox: -150, oy: -14, hp: 110, r: 15, kind: 'pod', score: 5000, size: 26, fixed: true, hidden: true, appear: 2 },
+    { name: 'm2', ox: 150, oy: -14, hp: 110, r: 15, kind: 'pod', score: 5000, size: 26, fixed: true, hidden: true, appear: 2 },
+    { name: 'core', ox: 0, oy: 4, hp: 750, r: 26, kind: 'core', score: 50000, size: 50, f: { 2: [0, 0] } }],
+  /* 形態1：重裝甲步行者 → 形態2：裝甲剝落、機體升高、側臂展開迫擊砲 */
+  scale: [1, 1, 1.14], morph: { 2: { scale: 1.14 } },
+  plates: { 1: [[-58, -40, 34, 22], [24, -40, 34, 22], [-40, 26, 80, 16], [-120, 0, 40, 18], [80, 0, 40, 18]] },
+  wings: { x0: 112, y0: -14, pts: [0, -10, 30, -26, 46, -20, 50, 4, 30, 14, 0, 10], inner: [6, -6, 30, -18, 40, -12, 42, 2, 6, 4], col: '#7a5a34', edge: '#c09050' },
+  vents: [[-30, -30], [30, -30], [0, 44]],
   armor: (b) => !!(BP(b, 'lc') || BP(b, 'rc')),
   toP2: (b) => (!BP(b, 'lc') && !BP(b, 'rc')) || b.core.hp < b.core.maxHp * 0.6,
   toP3: (b) => b.core.hp < b.core.maxHp * 0.3,
@@ -3089,15 +3580,21 @@ const BOSS2 = { name: 'DESERT WALKER', ground: true, enterY: 165, enterSpd: 95, 
   fire(b, dt) {
     const c = b.core;
     for (const n of ['lc', 'rc']) { const p = BP(b, n); if (p && every(p, 'f', b.phase >= 2 ? 1.3 : 1.8, dt)) for (let k = -1; k <= 1; k++) eShot(p.x + Math.cos(p.ta) * 24, p.y + Math.sin(p.ta) * 24, p.ta + k * 0.15, 180, true); }
-    for (const n of ['lp', 'rp']) { const p = BP(b, n); if (p && every(p, 'f', 2.6, dt)) { homing(p.x - 6, p.y, Math.PI / 2 + 0.6, 105); homing(p.x + 6, p.y, Math.PI / 2 - 0.6, 105); } }
-    if (b.phase === 1) { if (every(b, 'r', 2.8, dt)) ring(c.x, c.y + 10, 16, 120, b.t); }
-    else if (b.phase === 2) {
-      if (b.cycle % 6 < 3) { if (every(b, 's', 0.09, dt)) spiralShots(b, c.x, c.y + 10, 2, 140, 0.24, 'sp'); }
-      else if (every(b, 'f', 1.1, dt)) fan(c.x, c.y + 10, 9, 165, 0.15, true);
+    for (const n of ['lp', 'rp']) { const p = BP(b, n); if (p && every(p, 'f', b.phase >= 2 ? 3.2 : 2.6, dt)) { homing(p.x - 6, p.y, Math.PI / 2 + 0.6, 105); homing(p.x + 6, p.y, Math.PI / 2 - 0.6, 105); } }
+    if (b.phase === 1) {                                   // 形態1：環形彈 + 三向狙擊針彈
+      if (every(b, 'r', 2.8, dt)) ring(c.x, c.y + 10, 16, 120, b.t);
+      if (every(b, 'n', 2.0, dt)) needleBurst(c, 3, 0.12, 210);
     } else {
-      if (every(b, 's', 0.1, dt)) { spiralShots(b, c.x, c.y, 2, 135, 0.21, 'sp'); spiralShots(b, c.x, c.y, 2, 120, -0.17, 'sp2'); }
-      if (every(b, 'r', 2.6, dt)) ring(c.x, c.y, 20, 110, Math.random());
-      if (every(b, 'st', 2.0, dt)) stream(c, 3, 0.09, 250);
+      for (const n of ['m1', 'm2']) { const p = BP(b, n); if (p && every(p, 'f', 2.0, dt)) shellDrop(p.x, p.y + 10, 170, 1.1, 8); } // 迫擊砲：定時爆裂彈
+      if (b.phase === 2) {                                 // 形態2：米粒螺旋 ⇄ 大扇形，夾雜彈牆
+        if (b.cycle % 6 < 3) { if (every(b, 's', 0.1, dt)) spiralShots(b, c.x, c.y + 10, 2, 140, 0.24, 'sp'); }
+        else if (every(b, 'f', 1.2, dt)) fan(c.x, c.y + 10, 9, 165, 0.15, true);
+        if (every(b, 'w', 5.0, dt)) wallGap(c.y + 40, player.x + rand(-70, 70), 86, 90);
+      } else {                                             // 暴走：雙螺旋 + 加速環 + 連射
+        if (every(b, 's', 0.11, dt)) { spiralShots(b, c.x, c.y, 2, 135, 0.21, 'sp'); spiralShots(b, c.x, c.y, 2, 120, -0.17, 'sp2'); }
+        if (every(b, 'r', 2.8, dt)) accelRing(c.x, c.y, 18, Math.random());
+        if (every(b, 'st', 2.0, dt)) stream(c, 3, 0.09, 250);
+      }
     }
   },
   hull(b, sh) {
@@ -3121,29 +3618,39 @@ const BOSS2 = { name: 'DESERT WALKER', ground: true, enterY: 165, enterSpd: 95, 
 const PAL3 = { ring: '#2e3038', base: '#6a7080', mid: '#8a90a0', light: '#b0b6c4', barrel: '#1c1e24', core1: '#ff9040', core2: '#ff3070' };
 const BOSS3 = { name: 'IRON FORTRESS', ground: true, enterY: 130, enterSpd: 85, y0: -150, w: 190, h: 60, pal: PAL3,
   parts: [
-    { name: 't1', ox: -170, oy: -26, hp: 70, r: 13, kind: 'turret', score: 3000 },
-    { name: 't2', ox: -112, oy: 30, hp: 70, r: 13, kind: 'turret', score: 3000 },
-    { name: 't3', ox: 112, oy: 30, hp: 70, r: 13, kind: 'turret', score: 3000 },
-    { name: 't4', ox: 170, oy: -26, hp: 70, r: 13, kind: 'turret', score: 3000 },
-    { name: 'lc', ox: -56, oy: 40, hp: 180, r: 20, kind: 'cannon', score: 8000, size: 34 },
-    { name: 'rc', ox: 56, oy: 40, hp: 180, r: 20, kind: 'cannon', score: 8000, size: 34 },
-    { name: 'core', ox: 0, oy: -6, hp: 850, r: 28, kind: 'core', score: 60000, size: 54 }],
+    { name: 't1', ox: -170, oy: -26, hp: 70, r: 13, kind: 'turret', score: 3000, f: { 2: [-186, -6] } },
+    { name: 't2', ox: -112, oy: 30, hp: 70, r: 13, kind: 'turret', score: 3000, f: { 2: [-128, 52] } },
+    { name: 't3', ox: 112, oy: 30, hp: 70, r: 13, kind: 'turret', score: 3000, f: { 2: [128, 52] } },
+    { name: 't4', ox: 170, oy: -26, hp: 70, r: 13, kind: 'turret', score: 3000, f: { 2: [186, -6] } },
+    { name: 'lc', ox: -56, oy: 40, hp: 180, r: 20, kind: 'cannon', score: 8000, size: 34, f: { 2: [-78, 46] } },
+    { name: 'rc', ox: 56, oy: 40, hp: 180, r: 20, kind: 'cannon', score: 8000, size: 34, f: { 2: [78, 46] } },
+    { name: 'lz', ox: 0, oy: 50, hp: 220, r: 16, kind: 'emitter', score: 8000, size: 30, fixed: true, hidden: true, appear: 2 },
+    { name: 'core', ox: 0, oy: -6, hp: 850, r: 28, kind: 'core', score: 60000, size: 54, f: { 2: [0, -16] } }],
+  /* 形態1：封閉要塞 → 形態2：中央裝甲左右裂開、升起雷射主砲、砲塔外移 */
+  scale: [1, 1, 1.06], morph: { 2: { scale: 1.06 } },
+  plates: { 1: [[-50, -30, 48, 70], [2, -30, 48, 70], [-150, -60, 50, 20], [100, -60, 50, 20]] },
+  wings: { x0: 200, y0: 10, pts: [0, -30, 28, -40, 36, -10, 30, 30, 0, 26], inner: [4, -24, 24, -32, 30, -8, 24, 22, 4, 20], col: '#4a4e58', edge: '#ff6040' },
+  vents: [[-90, -40], [90, -40], [-40, 30], [40, 30]],
   armor: (b) => !!(BP(b, 'lc') || BP(b, 'rc')),
   toP2: (b) => (!BP(b, 'lc') && !BP(b, 'rc')) || b.core.hp < b.core.maxHp * 0.6,
   toP3: (b) => b.core.hp < b.core.maxHp * 0.3,
   move(b, dt) { b.x = W / 2 + Math.sin(b.t * 0.3) * 16; b.y = 130; },
   fire(b, dt) {
     const c = b.core;
-    for (const n of ['t1', 't2', 't3', 't4']) { const p = BP(b, n); if (p && every(p, 'f', b.phase >= 3 ? 0.9 : 1.4, dt)) aimShot(p.x, p.y, 195); }
+    for (const n of ['t1', 't2', 't3', 't4']) { const p = BP(b, n); if (p && every(p, 'f', b.phase >= 3 ? 0.9 : 1.4, dt)) aimShot(p.x, p.y, 200, 0, 1, false, 'needle'); }
     for (const n of ['lc', 'rc']) { const p = BP(b, n); if (p && every(p, 'f', 1.6, dt)) for (let k = -1; k <= 1; k++) eShot(p.x + Math.cos(p.ta) * 24, p.y + Math.sin(p.ta) * 24, p.ta + k * 0.14, 185, true); }
-    if (b.phase === 1) { if (every(b, 'r', 2.6, dt)) ring(c.x, c.y + 20, 14, 120, b.t); }
-    else if (b.phase === 2) {
-      if (every(b, 'bm', 5.0, dt)) beam(clamp(player.x, 30, W - 30), b.y + 70, 40, 1.1, 1.1);
-      if (every(b, 's', 0.1, dt)) spiralShots(b, c.x, c.y + 20, 3, 130, 0.2, 'sp');
-    } else {
-      if (every(b, 'bm', 4.4, dt)) { const px = clamp(player.x, 30, W - 30); beam(px, b.y + 70, 36, 1.0, 1.0); beam(clamp(px + 110, 20, W - 20), b.y + 70, 36, 1.3, 0.9); beam(clamp(px - 110, 20, W - 20), b.y + 70, 36, 1.3, 0.9); }
-      if (every(b, 's', 0.09, dt)) spiralShots(b, c.x, c.y + 20, 3, 125, -0.18, 'sp');
-      if (every(b, 'r', 3.0, dt)) ring(c.x, c.y + 20, 22, 110, Math.random());
+    const lz = BP(b, 'lz');
+    if (b.phase === 1) {                                  // 形態1：環形彈 + 彈牆
+      if (every(b, 'r', 2.6, dt)) ring(c.x, c.y + 20, 14, 120, b.t);
+      if (every(b, 'w', 4.6, dt)) wallGap(b.y + 60, player.x + rand(-80, 80), 90, 88);
+    } else if (b.phase === 2) {                           // 形態2：雷射主砲追瞄光束 + 三臂米粒螺旋
+      if (lz && every(b, 'bm', 4.2, dt)) beam(clamp(player.x, 30, W - 30), b.y + 70, 40, 1.1, 1.1);
+      if (every(b, 's', 0.11, dt)) spiralShots(b, c.x, c.y + 20, 3, 130, 0.2, 'sp');
+      if (!lz && every(b, 'r', 2.4, dt)) accelRing(c.x, c.y + 20, 16, Math.random());
+    } else {                                              // 暴走：三道光束 + 花瓣彈 + 彈牆
+      if (every(b, 'bm', 4.6, dt)) { const px = clamp(player.x, 30, W - 30); beam(px, b.y + 70, 36, 1.0, 1.0); beam(clamp(px + 110, 20, W - 20), b.y + 70, 36, 1.3, 0.9); beam(clamp(px - 110, 20, W - 20), b.y + 70, 36, 1.3, 0.9); }
+      if (every(b, 'fl', 2.6, dt)) flower(c.x, c.y + 20, 12, 2, Math.random());
+      if (every(b, 'w', 5.5, dt)) wallGap(b.y + 60, player.x + rand(-60, 60), 84, 95);
     }
   },
   hull(b, sh) {
@@ -3165,27 +3672,39 @@ const BOSS4 = { name: 'BATTLESHIP LEVIATHAN', ground: true, noDecal: true, enter
   parts: [
     { name: 'm1', ox: 0, oy: -100, hp: 170, r: 19, kind: 'cannon', score: 8000, size: 34 },
     { name: 'm3', ox: 0, oy: 92, hp: 170, r: 19, kind: 'cannon', score: 8000, size: 34 },
-    { name: 'a1', ox: -36, oy: -56, hp: 60, r: 11, kind: 'turret', score: 3000 },
-    { name: 'a2', ox: 36, oy: -56, hp: 60, r: 11, kind: 'turret', score: 3000 },
-    { name: 'a3', ox: -36, oy: 50, hp: 60, r: 11, kind: 'turret', score: 3000 },
-    { name: 'a4', ox: 36, oy: 50, hp: 60, r: 11, kind: 'turret', score: 3000 },
+    { name: 'a1', ox: -36, oy: -56, hp: 60, r: 11, kind: 'turret', score: 3000, f: { 2: [-44, -64] } },
+    { name: 'a2', ox: 36, oy: -56, hp: 60, r: 11, kind: 'turret', score: 3000, f: { 2: [44, -64] } },
+    { name: 'a3', ox: -36, oy: 50, hp: 60, r: 11, kind: 'turret', score: 3000, f: { 2: [-44, 58] } },
+    { name: 'a4', ox: 36, oy: 50, hp: 60, r: 11, kind: 'turret', score: 3000, f: { 2: [44, 58] } },
+    { name: 'p1', ox: -96, oy: 0, hp: 120, r: 15, kind: 'pod', score: 5000, size: 26, fixed: true, hidden: true, appear: 2 },
+    { name: 'p2', ox: 96, oy: 0, hp: 120, r: 15, kind: 'pod', score: 5000, size: 26, fixed: true, hidden: true, appear: 2 },
     { name: 'core', ox: 0, oy: -4, hp: 900, r: 24, kind: 'core', score: 60000, size: 54 }],
+  /* 形態1：戰艦 → 形態2：側舷裝甲炸開、左右展開飛彈甲板翼 */
+  scale: [1, 1, 1.08], morph: { 2: { scale: 1.08 } },
+  plates: { 1: [[-48, -40, 18, 70], [30, -40, 18, 70], [-30, -130, 60, 18], [-30, 112, 60, 18]] },
+  wings: { x0: 44, y0: 0, pts: [0, -34, 52, -26, 68, -6, 68, 10, 52, 26, 0, 34], inner: [6, -24, 46, -18, 58, -4, 58, 6, 46, 18, 6, 24], col: '#4a5464', edge: '#8aa0c0' },
+  vents: [[0, -60], [0, 40]],
   armor: (b) => !!(BP(b, 'm1') || BP(b, 'm3')),
   toP2: (b) => (!BP(b, 'm1') && !BP(b, 'm3')) || b.core.hp < b.core.maxHp * 0.6,
   toP3: (b) => b.core.hp < b.core.maxHp * 0.3,
-  move(b, dt) { b.x = W / 2 + Math.sin(b.t * 0.25) * (b.phase >= 2 ? 120 : 70); b.y = 175 + Math.sin(b.t * 0.6) * 8; },
+  move(b, dt) { b.x = W / 2 + Math.sin(b.t * 0.25) * (b.phase >= 2 ? 90 : 70); b.y = 175 + Math.sin(b.t * 0.6) * 8; },
   fire(b, dt) {
     const c = b.core;
     for (const n of ['m1', 'm3']) { const p = BP(b, n); if (p && every(p, 'f', 1.9, dt)) for (let k = -1; k <= 1; k++) eShot(p.x + Math.cos(p.ta) * 24, p.y + Math.sin(p.ta) * 24, p.ta + k * 0.16, 175, true); }
-    for (const n of ['a1', 'a2', 'a3', 'a4']) { const p = BP(b, n); if (p && every(p, 'f', 1.1, dt)) aimShot(p.x, p.y, 200); }
-    if (b.phase === 1) { if (every(b, 'r', 3.0, dt)) ring(c.x, c.y, 12, 115, b.t); }
-    else if (b.phase === 2) {
-      if (every(b, 'bs', 2.2, dt)) for (const s of [-1, 1]) for (let k = 0; k < 5; k++) eShot(c.x + s * 30, c.y, Math.PI / 2 - s * (0.3 + k * 0.22), 145);
-      if (b.cycle % 5 < 2.5 && every(b, 's', 0.1, dt)) spiralShots(b, c.x, c.y, 2, 135, 0.27, 'sp');
+    for (const n of ['a1', 'a2', 'a3', 'a4']) { const p = BP(b, n); if (p && every(p, 'f', 1.2, dt)) aimShot(p.x, p.y, 205, 0, 1, false, 'needle'); }
+    if (b.phase === 1) {                                  // 形態1：環形彈 + 定時水雷
+      if (every(b, 'r', 3.0, dt)) ring(c.x, c.y, 12, 115, b.t);
+      if (every(b, 'mn', 5.0, dt)) { shellDrop(c.x - 40, c.y, 120, 1.3, 10, 'ring'); shellDrop(c.x + 40, c.y, 120, 1.3, 10, 'ring'); }
     } else {
-      if (every(b, 's', 0.09, dt)) spiralShots(b, c.x, c.y, 3, 130, 0.22, 'sp');
-      if (every(b, 'st', 1.8, dt)) stream(c, 5, 0.07, 255);
-      if (every(b, 'r', 3.0, dt)) ring(c.x, c.y, 20, 110, Math.random());
+      for (const n of ['p1', 'p2']) { const p = BP(b, n); if (p && every(p, 'f', 2.6, dt)) for (const s of [-1, 1]) missile(p.x + s * 8, p.y, Math.PI / 2 + s * 0.9, 95); } // 飛彈甲板齊射
+      if (b.phase === 2) {                                // 形態2：舷側扇形齊射 + 米粒螺旋
+        if (every(b, 'bs', 2.2, dt)) for (const s of [-1, 1]) for (let k = 0; k < 5; k++) eShot(c.x + s * 30, c.y, Math.PI / 2 - s * (0.3 + k * 0.22), 145);
+        if (b.cycle % 5 < 2.5 && every(b, 's', 0.1, dt)) spiralShots(b, c.x, c.y, 2, 135, 0.27, 'sp');
+      } else {                                            // 暴走：三臂螺旋 + 連射 + 加速環
+        if (every(b, 's', 0.1, dt)) spiralShots(b, c.x, c.y, 3, 130, 0.22, 'sp');
+        if (every(b, 'st', 1.8, dt)) stream(c, 5, 0.07, 255);
+        if (every(b, 'r', 3.0, dt)) accelRing(c.x, c.y, 20, Math.random());
+      }
     }
   },
   hull(b, sh) {
@@ -3204,34 +3723,46 @@ const BOSS5 = { name: 'CRIMSON MOTHERSHIP', final: true, enterY: 165, enterSpd: 
   parts: [
     { name: 'lw', ox: -132, oy: 14, hp: 220, r: 22, kind: 'cannon', score: 10000, size: 36 },
     { name: 'rw', ox: 132, oy: 14, hp: 220, r: 22, kind: 'cannon', score: 10000, size: 36 },
-    { name: 't1', ox: -72, oy: -62, hp: 80, r: 12, kind: 'turret', score: 3000 },
-    { name: 't2', ox: 72, oy: -62, hp: 80, r: 12, kind: 'turret', score: 3000 },
-    { name: 't3', ox: -84, oy: 62, hp: 80, r: 12, kind: 'turret', score: 3000 },
-    { name: 't4', ox: 84, oy: 62, hp: 80, r: 12, kind: 'turret', score: 3000 },
-    { name: 'e1', ox: -54, oy: 26, hp: 240, r: 15, kind: 'emitter', score: 8000, size: 30, hidden: true, fixed: true },
-    { name: 'e2', ox: 54, oy: 26, hp: 240, r: 15, kind: 'emitter', score: 8000, size: 30, hidden: true, fixed: true },
-    { name: 'core', ox: 0, oy: -6, hp: 1300, r: 30, kind: 'core', score: 100000, size: 60 }],
+    { name: 't1', ox: -72, oy: -62, hp: 80, r: 12, kind: 'turret', score: 3000, f: { 3: [-96, -70] } },
+    { name: 't2', ox: 72, oy: -62, hp: 80, r: 12, kind: 'turret', score: 3000, f: { 3: [96, -70] } },
+    { name: 't3', ox: -84, oy: 62, hp: 80, r: 12, kind: 'turret', score: 3000, f: { 3: [-110, 70] } },
+    { name: 't4', ox: 84, oy: 62, hp: 80, r: 12, kind: 'turret', score: 3000, f: { 3: [110, 70] } },
+    { name: 'e1', ox: -54, oy: 26, hp: 240, r: 15, kind: 'emitter', score: 8000, size: 30, hidden: true, appear: 2, fixed: true, f: { 2: [-78, 40], 3: [-118, 20] } },
+    { name: 'e2', ox: 54, oy: 26, hp: 240, r: 15, kind: 'emitter', score: 8000, size: 30, hidden: true, appear: 2, fixed: true, f: { 2: [78, 40], 3: [118, 20] } },
+    { name: 'h1', ox: -40, oy: 70, hp: 150, r: 14, kind: 'pod', score: 6000, size: 26, hidden: true, appear: 3, fixed: true },
+    { name: 'h2', ox: 40, oy: 70, hp: 150, r: 14, kind: 'pod', score: 6000, size: 26, hidden: true, appear: 3, fixed: true },
+    { name: 'core', ox: 0, oy: -6, hp: 1300, r: 30, kind: 'core', score: 100000, size: 60, f: { 3: [0, 0] } }],
+  /* 形態1：重裝母艦 → 形態2：外殼剝落、能量臂展開 → 形態3：核心暴走、尖刺冠展開、機體巨大化 */
+  scale: [1, 1, 1.08, 1.16], morph: { 2: { scale: 1.08 }, 3: { scale: 1.16, dur: 1.6 } },
+  plates: { 1: [[-110, -40, 50, 26], [60, -40, 50, 26], [-60, 40, 120, 18], [-160, -10, 30, 40], [130, -10, 30, 40]], 2: [[-44, -70, 88, 16], [-90, 52, 40, 14], [50, 52, 40, 14]] },
+  wings: { x0: 150, y0: 10, pts: [0, -24, 50, -60, 70, -54, 44, 0, 70, 40, 50, 46, 0, 26], inner: [8, -16, 46, -46, 56, -42, 34, 0, 56, 32, 46, 34, 8, 18], col: '#5a2a6a', edge: '#ff60c0' },
+  spikes: { n: 8, r0: 36, len: 34, col: '#5a2a70', edge: '#ff3070' },
+  vents: [[-120, 40], [120, 40], [-60, -50], [60, -50], [0, 70]],
   armorMul: 0.35,
   armor: (b) => (b.phase <= 1 && !!(BP(b, 'lw') || BP(b, 'rw'))) || (b.phase === 2 && !!(BP(b, 'e1') || BP(b, 'e2'))),
   toP2: (b) => (!BP(b, 'lw') && !BP(b, 'rw')) || b.core.hp < b.core.maxHp * 0.7,
-  toP3: (b) => (!BP(b, 'e1') && !BP(b, 'e2')) || b.core.hp < b.core.maxHp * 0.35,
-  onPhase(b, n) { if (n === 2) { reveal(b, 'e1'); reveal(b, 'e2'); } if (n === 3) { for (let k = 0; k < 6; k++) explode(b.x + rand(-150, 150), b.y + rand(-60, 60), 34); } },
-  move(b, dt) { const a = b.phase >= 3 ? 120 : b.phase === 2 ? 90 : 60; b.x = W / 2 + Math.sin(b.t * 0.33) * a; b.y = 165 + Math.sin(b.t * 0.8) * 14; },
+  toP3: (b) => (b.form >= 2 && !BP(b, 'e1') && !BP(b, 'e2')) || b.core.hp < b.core.maxHp * 0.35,
+  move(b, dt) { const a = b.phase >= 3 ? 110 : b.phase === 2 ? 90 : 60; b.x = W / 2 + Math.sin(b.t * 0.33) * a; b.y = 165 + Math.sin(b.t * 0.8) * 14; },
   fire(b, dt) {
     const c = b.core;
-    for (const n of ['lw', 'rw']) { const p = BP(b, n); if (p && every(p, 'f', 1.6, dt)) { for (let k = -1; k <= 1; k++) eShot(p.x + Math.cos(p.ta) * 26, p.y + Math.sin(p.ta) * 26, p.ta + k * 0.15, 180, true); later(0.25, () => { if (!p.dead) eShot(p.x, p.y, p.ta, 235); }); } }
-    for (const n of ['t1', 't2', 't3', 't4']) { const p = BP(b, n); if (p && every(p, 'f', 1.2, dt)) aimShot(p.x, p.y, 200); }
-    if (b.phase === 1) { if (every(b, 'r', 2.4, dt)) { b.ro = (b.ro || 0) + 0.17; ring(c.x, c.y + 10, 18, 120, b.ro); } }
-    else if (b.phase === 2) {
+    for (const n of ['lw', 'rw']) { const p = BP(b, n); if (p && every(p, 'f', 1.6, dt)) { for (let k = -1; k <= 1; k++) eShot(p.x + Math.cos(p.ta) * 26, p.y + Math.sin(p.ta) * 26, p.ta + k * 0.15, 180, true); later(0.25, () => { if (!p.dead) eShot(p.x, p.y, p.ta, 235, false, 'needle'); }); } }
+    for (const n of ['t1', 't2', 't3', 't4']) { const p = BP(b, n); if (p && every(p, 'f', 1.2, dt)) aimShot(p.x, p.y, 205, 0, 1, false, 'needle'); }
+    if (b.phase === 1) {                                  // 形態1：環形彈 + 追蹤飛彈 + 定時爆裂彈
+      if (every(b, 'r', 2.4, dt)) { b.ro = (b.ro || 0) + 0.17; ring(c.x, c.y + 10, 18, 120, b.ro); }
+      if (every(b, 'ms', 4.0, dt)) { missile(c.x - 60, c.y + 30, Math.PI / 2 + 0.8, 95); missile(c.x + 60, c.y + 30, Math.PI / 2 - 0.8, 95); }
+      if (every(b, 'sh', 3.4, dt)) shellDrop(clamp(player.x, 40, W - 40), c.y + 40, 190, 1.2, 10);
+    } else if (b.phase === 2) {                           // 形態2：能量臂反向螺旋 + 追瞄雷射 + 彈牆
       const e1 = BP(b, 'e1'), e2 = BP(b, 'e2');
       if (b.cycle % 6 < 4 && every(b, 's', 0.12, dt)) { if (e1) spiralShots(b, e1.x, e1.y, 2, 130, 0.29, 'sa'); if (e2) spiralShots(b, e2.x, e2.y, 2, 130, -0.29, 'sb'); }
-      if (every(b, 'bm', 5.5, dt)) beam(clamp(player.x, 30, W - 30), c.y + 30, 36, 1.1, 1.2);
+      if (every(b, 'bm', 5.0, dt)) beam(clamp(player.x, 30, W - 30), c.y + 30, 36, 1.1, 1.2);
+      if (every(b, 'w', 5.5, dt)) wallGap(c.y + 60, player.x + rand(-70, 70), 84, 92);
       if (!e1 && !e2 && every(b, 'r', 2.0, dt)) ring(c.x, c.y, 18, 125, Math.random());
-    } else {
-      if (every(b, 's', 0.1, dt)) spiralShots(b, c.x, c.y + 10, 5, 125, 0.16, 'sp');
-      if (every(b, 'f', 1.5, dt)) fan(c.x, c.y + 20, 7, 175, 0.14, true);
-      if (every(b, 'bm', 4.2, dt)) { const px = clamp(player.x, 40, W - 40); beam(clamp(px - 75, 20, W - 20), c.y + 30, 32, 1.1, 1.0); beam(clamp(px + 75, 20, W - 20), c.y + 30, 32, 1.1, 1.0); }
-      if (every(b, 'r', 3.4, dt)) ring(c.x, c.y, 24, 105, Math.random());
+    } else {                                              // 形態3：花瓣彈 + 加速環 + 雙光束 + 尖刺砲彈 + 五臂螺旋
+      if (every(b, 's', 0.11, dt)) spiralShots(b, c.x, c.y + 10, 5, 125, 0.16, 'sp');
+      if (every(b, 'fl', 2.4, dt)) flower(c.x, c.y, 14, 2, Math.random());
+      if (every(b, 'ac', 3.2, dt)) accelRing(c.x, c.y, 22, Math.random(), 40, 200);
+      if (every(b, 'bm', 4.6, dt)) { const px = clamp(player.x, 40, W - 40); beam(clamp(px - 75, 20, W - 20), c.y + 30, 32, 1.1, 1.0); beam(clamp(px + 75, 20, W - 20), c.y + 30, 32, 1.1, 1.0); }
+      for (const n of ['h1', 'h2']) { const p = BP(b, n); if (p && every(p, 'f', 2.4, dt)) shellDrop(p.x, p.y + 10, 160, 1.0, 9); }
     }
   },
   hull(b, sh) {
@@ -3335,7 +3866,7 @@ const TL1 = [
   [157, () => { turret(60, -30); turret(420, -30); vForm(W / 2, { drop: 'P' }); }],
   // 最終BOSS
   [162, () => bossWarn()],
-  [165.5, () => { spawnBoss(); }]
+  [165.5, () => { spawnGBoss(BOSS1); }]
 ];
 
 function updateTimeline(dt) {
@@ -3460,6 +3991,31 @@ const STAGES = [null,
   { sub: '夜之海・艦隊決戰', tl: TL4, music: 's4', speed: 40 },
   { sub: '最終決戰・敵總部', tl: TL5, music: 's5', speed: 40 }
 ];
+
+/* ===== 新攻擊型敵人配置（依關卡遞增難度） ===== */
+const TL_EXTRA = [null,
+  [ // 第1關：自殺機、轟炸機入門
+    [44.5, () => kamiSet(2, 0.6)], [62, () => kamiSet(3, 0.5)], [100, () => bomber(true, 70)], [108, () => kamiSet(3, 0.5)],
+    [118, () => bomber(false, 90)], [144, () => kamiSet(3, 0.45)]],
+  [ // 第2關：加入雷射無人機
+    [20, () => kamiSet(3, 0.5)], [34, () => laserDrone(120)], [48, () => bomber(true, 70)], [66, () => { laserDrone(100); laserDrone(380); }],
+    [100, () => bomber(false, 80)], [108, () => laserDrone(240)], [118, () => kamiSet(4, 0.4)], [138, () => bomber(true, 60)], [150, () => { laserDrone(140); laserDrone(340); }]],
+  [ // 第3關：彈牆艦
+    [18, () => wallShip(240)], [30, () => kamiSet(4, 0.4)], [44, () => { laserDrone(90); laserDrone(390); }], [60, () => bomber(true, 70)],
+    [74, () => wallShip(160)], [100, () => wallShip(320)], [110, () => bomber(false, 80)], [126, () => kamiSet(4, 0.35)],
+    [140, () => { laserDrone(120); laserDrone(240); laserDrone(360); }], [152, () => wallShip(240)]],
+  [ // 第4關：定時水雷、轟炸機群
+    [16, () => tmines(4)], [28, () => bomber(true, 60)], [40, () => kamiSet(5, 0.35)], [54, () => wallShip(240)], [68, () => tmines(5)],
+    [80, () => { laserDrone(100); laserDrone(380); }], [100, () => { bomber(true, 60); bomber(false, 120); }], [112, () => tmines(5)],
+    [128, () => wallShip(160)], [140, () => kamiSet(5, 0.3)], [150, () => tmines(4)]],
+  [ // 第5關：全部登場
+    [12, () => kamiSet(5, 0.3)], [24, () => wallShip(240)], [33, () => tmines(5)], [41, () => { laserDrone(100); laserDrone(380); }],
+    [52, () => bomber(true, 60)], [63, () => kamiSet(6, 0.3)], [70, () => wallShip(140)], [81, () => { tmines(4); laserDrone(240); }],
+    [100, () => { bomber(true, 60); bomber(false, 110); }], [108, () => wallShip(340)], [118, () => tmines(6)], [133, () => kamiSet(6, 0.28)],
+    [142, () => { laserDrone(90); laserDrone(240); laserDrone(390); }], [150, () => wallShip(240)], [156, () => tmines(5)]]
+];
+for (let n = 1; n <= 5; n++) { STAGES[n].tl.push(...TL_EXTRA[n].filter((ev) => ev[0] < 88 || ev[0] > 123)); // 中BOSS 期間不加
+  STAGES[n].tl.push([131.5, () => bomber(n % 2 === 0, 70)]); STAGES[n].tl.sort((a, b) => a[0] - b[0]); }
 
 </script>
 <script>
