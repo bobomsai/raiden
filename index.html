@@ -1658,11 +1658,11 @@ function playerFire(dt) {
   if (p.missile && p.mfireT <= 0) {
     if (p.missile === 'H') {
       p.mfireT = 0.55;
-      const n = p.mlevel + 1;
+      const n = Math.min(6, p.mlevel + 1); // Lv1=2 … Lv5=6 顆追蹤導彈
       for (let i = 0; i < n; i++) {
         const side = i % 2 === 0 ? -1 : 1, off = 10 + Math.floor(i / 2) * 7;
         const a = -Math.PI / 2 + side * (0.5 + Math.floor(i / 2) * 0.25);
-        pBullets.push({ k: 'h', x: p.x + side * off, y: p.y, vx: Math.cos(a) * 260, vy: Math.sin(a) * 260, r: 5, dmg: 1.6, ang: a, t: 0, target: null });
+        pBullets.push({ k: 'h', x: p.x + side * off, y: p.y, vx: Math.cos(a) * 260, vy: Math.sin(a) * 260, r: 5, dmg: n >= 6 ? 1.5 : 1.6, ang: a, t: 0, target: null });
       }
     } else {
       p.mfireT = 0.7;
@@ -2249,7 +2249,7 @@ function pickItem(it) {
     }
     case 'M': case 'N': {
       const t = it.kind === 'M' ? 'H' : 'N';
-      if (p.missile === t) { if (p.mlevel < 4) p.mlevel++; else addScore(3000); }
+      if (p.missile === t) { if (p.mlevel < (t === 'H' ? 5 : 4)) p.mlevel++; else addScore(3000); }
       else { p.missile = t; p.mlevel = Math.max(1, p.mlevel); }
       floatText(it.x, it.y, t === 'H' ? 'HOMING' : 'MISSILE', '#a0ff80');
       SFX.play('power'); break;
@@ -2972,7 +2972,7 @@ DRW.satellite = function (e) {
 function spawnMid(def) {
   G.warnSmall = 2;
   return mkEnemy('mid', def.x || W / 2, def.y0 || -100, { hp: def.hp, r: def.r, score: def.score || 20000, size: def.size || 60, ground: !!def.ground, noDecal: !!def.noDecal,
-    phase: 0, bossbar: true, name: def.name, persistent: true, drop: def.drop || ['P', 'M', 'B', 'medal', 'medal'], invuln: true, def, boss: true, spin: 0 });
+    phase: 0, bossbar: true, name: def.name, persistent: true, drop: def.drop || ['P', 'M', 'B', 'medal', 'medal'], invuln: true, def, boss: true, spin: 0, form: 1, fscale: 1, morphT: -1, mk: 1, flying: [] });
 }
 UPD.mid = function (e, dt) {
   const d = e.def;
@@ -2982,15 +2982,20 @@ UPD.mid = function (e, dt) {
     if (e.y < -180 || e.y > H + 180) { e.dead = true; e.persistent = false; }
     return;
   }
+  updateFlying(e, dt);
+  if (e.morphT >= 0) { e.t -= dt; updateMidMorph(e, dt); return; }
+  if (e.form === 1 && d.morph && e.hp < e.maxHp * (d.morph.at || 0.5)) { startMidMorph(e); return; }
   d.move(e, dt);
   if (player.alive) d.fire(e, dt);
   if (e.t > (d.time || 34)) e.phase = 2;
   if (e.hp < e.maxHp * 0.4 && Math.random() < 0.3) particles.push({ t: 'smoke', x: e.x + rand(-e.r, e.r), y: e.y + rand(-10, 10), vx: 0, vy: 40, life: 0.8, max: 0.8, size: 8 });
 };
 DRW.mid = function (e) {
-  const d = e.def, shape = () => { ctx.translate(e.x, e.y); d.draw(e); };
+  const d = e.def, s = e.fscale || 1, shape = () => { ctx.translate(e.x, e.y); ctx.scale(s, s); drawFormBack(e, d); d.draw(e); drawFormFront(e, d); };
   if (!d.ground) withShadow(shape, 26, 56, 0.75);
-  ctx.save(); FLASH = e.flash > 0; shape(); FLASH = false; ctx.restore();
+  ctx.save(); FLASH = e.flash > 0 || (e.morphT >= 0 && Math.floor(e.morphT * 16) % 3 === 0); shape(); FLASH = false; ctx.restore();
+  if (e.flying && e.flying.length) drawFlying(e);
+  if (e.morphT >= 0) drawMorphGlow(e, d);
 };
 
 /* =============== 通用多部位 BOSS =============== */
@@ -3044,6 +3049,7 @@ UPD.gboss = function (b, dt) {
   if (b.phase === 0 || !player.alive) return;
   if (b.phase === 1 && d.toP2(b)) { gbossPhase(b, 2); return; }
   if (b.phase === 2 && d.toP3 && d.toP3(b)) { gbossPhase(b, 3); if (b.morphT >= 0) return; }
+  if (b.phase === 3 && d.toP4 && d.toP4(b)) { gbossPhase(b, 4); if (b.morphT >= 0) return; }
   b.cycle += dt;
   d.fire(b, dt);
   if (b.phase >= 3 && Math.random() < 0.25) particles.push({ t: 'smoke', x: b.x + rand(-(d.w || 120), d.w || 120), y: b.y + rand(-(d.h || 60), (d.h || 60) * 0.6), vx: 0, vy: 50, life: 0.9, max: 0.9, size: 10 });
@@ -3118,7 +3124,7 @@ function startMorph(b, n) {
     explode(b.x + lx, b.y + ly, 28);
   }
   flashScreen = Math.max(flashScreen, 0.7); addShake(18); SFX.play('exL');
-  floatText(b.x, b.y - 30, n >= 3 ? '!! FINAL FORM !!' : '— TRANSFORM —', '#ff80c0');
+  floatText(b.x, b.y - 30, n >= (b.def.lastForm || 3) ? '!! FINAL FORM !!' : '— TRANSFORM —', '#ff80c0');
 }
 function updateMorph(b, dt) {
   const d = b.def;
@@ -3168,17 +3174,29 @@ function drawPlates(list) {
 function drawFormBack(b, d) {
   const to = b.morphT >= 0 ? b.morphTo : b.form, mk = b.morphT >= 0 ? b.mk : 1;
   const u2 = b.form >= 2 ? 1 : to >= 2 ? mk : 0, u3 = b.form >= 3 ? 1 : to >= 3 ? mk : 0;
-  const w = d.wings;
-  if (w && u2 > 0) for (const sd of [-1, 1]) {
-    ctx.save(); ctx.translate(sd * w.x0, w.y0 || 0); ctx.scale(sd * u2, 0.4 + 0.6 * u2);
-    poly(w.pts, w.col); poly(w.inner, w.edge);
-    ctx.restore();
+  for (const [key, fm] of [['wings', 2], ['wings3', 3], ['wings4', 4]]) {
+    const w = d[key]; if (!w) continue;
+    const u = b.form >= fm ? 1 : to >= fm ? mk : 0; if (u <= 0) continue;
+    for (const sd of [-1, 1]) {
+      ctx.save(); ctx.translate(sd * w.x0, w.y0 || 0); ctx.scale(sd * u, 0.4 + 0.6 * u);
+      poly(w.pts, w.col); poly(w.inner, w.edge);
+      ctx.restore();
+    }
   }
 }
 /* 裝甲板與攻擊型態的發光排氣口，畫在機體上層 */
 function drawFormFront(b, d) {
   if (b.morphT < 0 && d.plates && d.plates[b.form]) drawPlates(d.plates[b.form]);
-  const sp = d.spikes, u3 = b.form >= 3 ? 1 : (b.morphT >= 0 && b.morphTo >= 3) ? b.mk : 0;
+  const sp = d.spikes, sf = (sp && sp.form) || 3;
+  const u3 = b.form >= sf ? 1 : (b.morphT >= 0 && b.morphTo >= sf) ? b.mk : 0;
+  const u4 = b.form >= 4 ? 1 : (b.morphT >= 0 && b.morphTo >= 4) ? b.mk : 0;
+  if (sp && u4 > 0) { // 第四形態：外圈金色尖刺 + 反向旋轉
+    const n = sp.n + 2, rot = -b.t * 0.9, cy = b.core ? b.core.oy : 0;
+    for (let i = 0; i < n; i++) {
+      const a = rot + i * TAU / n, r0 = sp.r0 + 8, r1 = r0 + sp.len * 1.7 * u4;
+      poly([Math.cos(a - 0.1) * r0, cy + Math.sin(a - 0.1) * r0, Math.cos(a) * r1, cy + Math.sin(a) * r1, Math.cos(a + 0.1) * r0, cy + Math.sin(a + 0.1) * r0], '#ffd040');
+    }
+  }
   if (sp && u3 > 0) { // 尖刺冠：圍繞核心旋轉展開
     const n = sp.n, rot = b.t * 0.6, cy = b.core ? b.core.oy : 0;
     for (let i = 0; i < n * 2; i++) {
@@ -3213,6 +3231,34 @@ function drawMorphGlow(b, d) {
   ctx.restore();
 }
 UPD.bosspart = UPD.bosspart || function () {};
+
+/* ======== 中BOSS 變形 ======== */
+function startMidMorph(e) {
+  const d = e.def, m = d.morph, s = e.fscale || 1;
+  e.morphT = 0; e.morphDur = m.dur || 1.1; e.morphTo = 2; e.s0 = s; e.s1 = m.scale || s; e.mk = 0; e.invuln = true;
+  clearHostiles();
+  const pl = d.plates && d.plates[1];
+  if (pl) for (const r of pl) {
+    const lx = (r[0] + r[2] / 2) * s, ly = (r[1] + r[3] / 2) * s;
+    e.flying.push({ x: e.x + lx, y: e.y + ly, w: r[2] * s, h: r[3] * s, vx: lx * 2.4 + rand(-40, 40), vy: rand(-170, -60) + ly, rot: 0, vr: rand(-6, 6), life: 1.5 });
+    explode(e.x + lx, e.y + ly, 26);
+  }
+  flashScreen = Math.max(flashScreen, 0.6); addShake(14); SFX.play('exL'); SFX.play('alarm');
+  floatText(e.x, e.y - 30, '— TRANSFORM —', '#ff80c0');
+}
+function updateMidMorph(e, dt) {
+  const d = e.def;
+  e.morphT += dt;
+  const k = Math.min(1, e.morphT / e.morphDur), q = k * k * (3 - 2 * k);
+  e.mk = q; e.fscale = lerp(e.s0, e.s1, q);
+  if (Math.random() < 0.3) explode(e.x + rand(-1, 1) * (d.w || 80), e.y + rand(-1, 1) * 50, rand(12, 22));
+  addShake(2.5);
+  if (k >= 1) {
+    e.morphT = -1; e.form = 2; e.mk = 1; e.invuln = false; e.r = d.r * e.fscale;
+    flashScreen = Math.max(flashScreen, 0.7); addShake(12); SFX.play('bomb'); explode(e.x, e.y, 50);
+  }
+}
+function midTips(e) { const t = e.def.tip, s = e.fscale || 1; return t ? [[e.x - t[0] * s, e.y + t[1] * s], [e.x + t[0] * s, e.y + t[1] * s]] : []; }
 
 </script>
 <script>
@@ -3409,10 +3455,47 @@ function stream(src, n, gap, spd) { for (let k = 0; k < n; k++) later(k * gap, (
 function homing(x, y, ang, spd) { missile(x, y, ang, spd); }
 
 /* ================= 中BOSS ================= */
-const MID2 = { name: 'SAND CRAWLER', hp: 600, r: 46, size: 70, ground: true, stopY: 150, enterSpd: 60, time: 34,
+/* 第 1 關中BOSS：重型轟炸機（通用引擎，支援變形） */
+const MID1 = { name: 'HEAVY BOMBER', hp: 420, r: 40, size: 60, stopY: 130, enterSpd: 70, time: 32, y0: -80, w: 110,
+  /* 變形：機背裝甲飛出 → 主翼外側展開副翼砲艙、機體放大 */
+  morph: { at: 0.55, scale: 1.15 }, tip: [122, -18],
+  plates: { 1: [[-80, -32, 40, 12], [40, -32, 40, 12], [-14, -34, 28, 40]] },
+  wings: { x0: 86, y0: -20, pts: [0, -8, 34, -20, 46, -10, 30, 8, 0, 6], inner: [4, -4, 30, -14, 38, -8, 26, 4, 4, 2], col: '#5a5248', edge: '#ff6040' },
+  vents: [[-34, 0], [34, 0], [0, 20]],
+  move(e, dt) { e.x = W / 2 + Math.sin(e.t * 0.5) * 110; e.y = 130 + Math.sin(e.t * 0.9) * 12; },
+  fire(e, dt) {
+    if (e.form < 2) {           // 形態1：雙三向針彈 + 定時爆裂彈 + 環形彈
+      if (every(e, 'a', 1.0, dt)) { aimShot(e.x - 50, e.y + 10, 205, 0.12, 3, false, 'needle'); aimShot(e.x + 50, e.y + 10, 205, 0.12, 3, false, 'needle'); }
+      if (every(e, 'sh', 2.4, dt)) { shellDrop(e.x - 34, e.y + 20, 160, 1.2, 6); shellDrop(e.x + 34, e.y + 20, 160, 1.2, 6); }
+      if (every(e, 'rg', 3.0, dt)) ring(e.x, e.y + 20, 12, 115, e.t);
+    } else {                    // 形態2：四臂米粒螺旋 ⇄ 九向大扇形、副翼針彈、追蹤飛彈
+      if (e.t % 8 < 4) { if (every(e, 'sp', 0.13, dt)) { e.spin += 0.32; for (let k = 0; k < 4; k++) eShot(e.x, e.y + 20, e.spin + k * TAU / 4, 140, false, 'rice'); } }
+      else if (every(e, 'f', 1.4, dt)) aimShot(e.x, e.y + 25, 160, 0.16, 9, true);
+      if (every(e, 'tp', 1.5, dt)) for (const [x, y] of midTips(e)) aimShot(x, y, 200, 0, 1, false, 'needle');
+      if (every(e, 'ms', 3.4, dt)) { missile(e.x - 60, e.y + 10, Math.PI / 2 + 0.7, 90); missile(e.x + 60, e.y + 10, Math.PI / 2 - 0.7, 90); }
+    }
+  },
+  draw(e) {
+    poly([0, -12, 90, -28, 92, -16, 60, 0, 20, 10, -20, 10, -60, 0, -92, -16, -90, -28], '#5a5248');
+    poly([0, -8, 86, -24, 86, -20, 0, 2, -86, -20, -86, -24], '#7a6e60');
+    for (const ox of [-62, -34, 34, 62]) { rect(ox - 6, -26, 12, 30, '#3a342e'); circ(ox, 4, 5, '#2a2622'); }
+    poly([0, 52, 18, 30, 16, -46, -16, -46, -18, 30], '#8a8070');
+    poly([0, 52, 7, 30, 7, -40, -7, -40, -7, 30], '#a89c88');
+    poly([0, -40, 30, -58, 30, -50, 0, -34, -30, -50, -30, -58], '#5a5248');
+    rect(-86, -24, 10, 8, '#c8302a'); rect(76, -24, 10, 8, '#c8302a');
+    circ(-50, 8, 6, '#3a3a3a'); circ(50, 8, 6, '#3a3a3a');
+    ctx.fillStyle = C(e.form >= 2 ? '#ff2060' : '#ff5040'); ctx.beginPath(); ctx.arc(0, 20, (e.form >= 2 ? 8 : 6) + Math.sin(e.t * 6) * 1.5, 0, TAU); ctx.fill();
+    ctx.fillStyle = C('#3a90c0'); ctx.beginPath(); ctx.ellipse(0, 38, 5, 9, 0, 0, TAU); ctx.fill();
+  } };
+const MID2 = { name: 'SAND CRAWLER', hp: 600, r: 46, size: 70, ground: true, stopY: 150, enterSpd: 60, time: 34, w: 90,
+  /* 變形：上層裝甲飛出 → 兩側鑽頭臂展開（臂端迫擊砲）、機體放大 */
+  morph: { at: 0.5, scale: 1.15 }, tip: [108, -30],
+  plates: { 1: [[-40, -56, 80, 14], [-44, 30, 30, 16], [14, 30, 30, 16]] },
+  wings: { x0: 60, y0: -30, pts: [0, -14, 46, -6, 58, 0, 46, 6, 0, 14], inner: [4, -7, 44, -2, 48, 0, 44, 2, 4, 7], col: '#6a5434', edge: '#e0b060' },
+  vents: [[-30, -40], [30, -40], [0, 50]],
   move(e, dt) { e.x = W / 2 + Math.sin(e.t * 0.4) * 90; e.y = 150 + Math.sin(e.t * 0.8) * 10; },
   fire(e, dt) {
-    if (e.hp > e.maxHp * 0.5) {   // 前半：雙三向扇形 + 環形 + 大扇形
+    if (e.form < 2) {   // 前半：雙三向扇形 + 環形 + 大扇形
       if (every(e, 'a', 1.1, dt)) { fan(e.x - 38, e.y + 20, 3, 175, 0.16); fan(e.x + 38, e.y + 20, 3, 175, 0.16); }
       if (every(e, 'b', 3.0, dt)) ring(e.x, e.y, 16, 115, e.t);
       if (every(e, 'c', 4.4, dt)) fan(e.x, e.y + 40, 7, 150, 0.17, true);
@@ -3420,6 +3503,7 @@ const MID2 = { name: 'SAND CRAWLER', hp: 600, r: 46, size: 70, ground: true, sto
       if (every(e, 'w', 3.2, dt)) wallGap(e.y + 70, player.x + rand(-70, 70), 90, 90);
       if (every(e, 'm', 3.6, dt)) { missile(e.x - 38, e.y + 20, Math.PI / 2 + 0.6, 95); missile(e.x + 38, e.y + 20, Math.PI / 2 - 0.6, 95); }
       if (every(e, 'n', 1.6, dt)) needleBurst(e, 3, 0.1, 215, 0, 40);
+      if (every(e, 'tp', 2.6, dt)) for (const [x, y] of midTips(e)) shellDrop(x, y, 150, 1.1, 8);
     }
   },
   draw(e) {
@@ -3433,16 +3517,22 @@ const MID2 = { name: 'SAND CRAWLER', hp: 600, r: 46, size: 70, ground: true, sto
     circ(0, 0, 20, '#6a5434'); circ(0, 0, 13, '#c04a30'); circ(-3, -3, 6, '#e07050');
     rect(-4, 20, 8, 26, '#3a2e20');
   } };
-const MID3 = { name: 'ARMORED AIRSHIP', hp: 700, r: 48, size: 70, stopY: 140, enterSpd: 55, time: 34,
+const MID3 = { name: 'ARMORED AIRSHIP', hp: 700, r: 48, size: 70, stopY: 140, enterSpd: 55, time: 34, w: 90,
+  /* 變形：氣囊裝甲飛出 → 兩側雷射翼展開、機體放大 */
+  morph: { at: 0.5, scale: 1.14 }, tip: [90, -6],
+  plates: { 1: [[-36, -74, 72, 14], [-40, -30, 26, 40], [14, -30, 26, 40], [-30, 22, 60, 12]] },
+  wings: { x0: 44, y0: -10, pts: [0, -22, 40, -32, 54, -14, 42, 14, 0, 18], inner: [4, -16, 36, -24, 46, -12, 36, 8, 4, 12], col: '#5a5e68', edge: '#80f0ff' },
+  vents: [[-44, 10], [44, 10], [0, 74]],
   move(e, dt) { e.x = W / 2 + Math.sin(e.t * 0.45) * 100; e.y = 140 + Math.sin(e.t * 0.9) * 12; },
   fire(e, dt) {
     if (every(e, 'a', 0.9, dt)) { for (const s of [-1, 1]) for (let k = 0; k < 3; k++) eShot(e.x + s * 44, e.y + 10, Math.PI / 2 - s * (0.5 + k * 0.25), 150); }
-    if (e.hp > e.maxHp * 0.5) {   // 前半：米粒螺旋 + 五向扇形
+    if (e.form < 2) {   // 前半：米粒螺旋 + 五向扇形
       if ((e.t % 8) > 4 && every(e, 'b', 0.12, dt)) spiralShots(e, e.x, e.y + 30, 2, 140, 0.3, 'sp');
       if (every(e, 'c', 2.6, dt)) fan(e.x, e.y + 60, 5, 185, 0.12, true);
     } else {                      // 後半：雙雷射夾擊 + 加速環
       if (every(e, 'bm', 4.0, dt)) { const px = clamp(player.x, 40, W - 40); beam(clamp(px - 70, 20, W - 20), e.y + 70, 30, 1.1, 0.9); beam(clamp(px + 70, 20, W - 20), e.y + 70, 30, 1.1, 0.9); }
       if (every(e, 'ac', 2.4, dt)) accelRing(e.x, e.y + 30, 16, e.t);
+      if (every(e, 'tp', 1.4, dt)) for (const [x, y] of midTips(e)) aimShot(x, y, 190, 0.18, 3, false, 'rice');
     }
   },
   draw(e) {
@@ -3454,17 +3544,22 @@ const MID3 = { name: 'ARMORED AIRSHIP', hp: 700, r: 48, size: 70, stopY: 140, en
     for (const s of [-1, 1]) { circ(s * 44, 10, 9, '#3a3e46'); circ(s * 44, 10, 5, '#c84030'); }
     circ(0, 74, 8, '#2a2a2e'); circ(0, 74, 4, '#ff5040');
   } };
-const MID4 = { name: 'AIRCRAFT CARRIER', hp: 800, r: 54, size: 80, ground: true, noDecal: true, stopY: 170, enterSpd: 45, time: 36, y0: -140,
+const MID4 = { name: 'AIRCRAFT CARRIER', hp: 800, r: 54, size: 80, ground: true, noDecal: true, stopY: 170, enterSpd: 45, time: 36, y0: -140, w: 90,
+  /* 變形：甲板裝甲炸開 → 兩側彈射甲板展開（甲板端飛彈艙）、艦身放大 */
+  morph: { at: 0.5, scale: 1.12 }, tip: [102, 0],
+  plates: { 1: [[-50, -112, 40, 18], [10, -112, 40, 18], [-50, 84, 100, 16], [-56, -20, 22, 50]] },
+  wings: { x0: 56, y0: 0, pts: [0, -44, 46, -32, 58, 0, 46, 32, 0, 44], inner: [4, -34, 40, -24, 50, 0, 40, 24, 4, 34], col: '#4a5260', edge: '#ffd040' },
+  vents: [[-30, -60], [30, -60], [-30, 60], [30, 60]],
   move(e, dt) { e.x = W / 2 + Math.sin(e.t * 0.3) * 70; e.y = 170 + Math.sin(e.t * 0.5) * 8; },
   fire(e, dt) {
     if (every(e, 'a', 3.0, dt)) { fighter(e.x - 20, e.y + 60, 'dive', { turnY: e.y + 120, shots: 0, color: 1, hp: 2 }); fighter(e.x + 20, e.y + 60, 'dive', { turnY: e.y + 120, shots: 0, color: 1, hp: 2 }); }
-    if (e.hp > e.maxHp * 0.5) {   // 前半：四角砲 + 環形彈
+    if (e.form < 2) {   // 前半：四角砲 + 環形彈
       if (every(e, 'b', 1.0, dt)) for (const [ox, oy] of [[-44, -90], [44, -90], [-44, 70], [44, 70]]) aimShot(e.x + ox, e.y + oy, 175);
       if (every(e, 'c', 3.4, dt)) ring(e.x, e.y, 18, 110, e.t);
     } else {                      // 後半：自殺機出擊 + 定時爆裂彈 + 追蹤飛彈
       if (every(e, 'k', 2.6, dt)) kamikaze(e.x + rand(-40, 40), { stopY: e.y + 90 });
       if (every(e, 'sh', 2.0, dt)) shellDrop(e.x + rand(-50, 50), e.y + 80, 150, 1.2, 10);
-      if (every(e, 'm', 3.0, dt)) { missile(e.x - 44, e.y + 70, Math.PI / 2 + 0.6, 95); missile(e.x + 44, e.y + 70, Math.PI / 2 - 0.6, 95); }
+      if (every(e, 'm', 3.0, dt)) for (const [x, y] of midTips(e)) missile(x, y, Math.PI / 2, 95);
     }
   },
   draw(e) {
@@ -3475,19 +3570,26 @@ const MID4 = { name: 'AIRCRAFT CARRIER', hp: 800, r: 54, size: 80, ground: true,
     for (const [ox, oy] of [[-44, -90], [44, -90], [-44, 70], [44, 70]]) { circ(ox, oy, 8, '#3a404a'); circ(ox, oy, 4, '#c84030'); }
     if (!FLASH) { ctx.fillStyle = Math.floor(e.t * 3) % 2 ? '#ffd040' : '#604010'; ctx.fillRect(-50, -60, 4, 4); ctx.fillRect(46, 60, 4, 4); }
   } };
-const MID5 = { name: 'TWIN ORBITER', hp: 900, r: 44, size: 70, stopY: 150, enterSpd: 60, time: 36,
+const MID5 = { name: 'TWIN ORBITER', hp: 900, r: 44, size: 70, stopY: 150, enterSpd: 60, time: 36, w: 90,
+  /* 變形：外殼裂開 → 尖刺冠與能量翼展開、雙子機軌道擴大 */
+  morph: { at: 0.5, scale: 1.16 }, tip: [100, 0],
+  plates: { 1: [[-50, -26, 36, 14], [14, -26, 36, 14], [-20, 18, 40, 12]] },
+  spikes: { form: 2, n: 6, r0: 20, len: 24, col: '#3a2a4a', edge: '#ff60c0' },
+  wings: { x0: 58, y0: 0, pts: [0, -10, 30, -26, 44, -22, 24, 0, 44, 22, 30, 26, 0, 10], inner: [6, -6, 28, -18, 36, -16, 18, 0, 36, 16, 28, 18, 6, 6], col: '#5a4a6a', edge: '#ff60c0' },
+  vents: [[-40, 0], [40, 0]],
   move(e, dt) { e.x = W / 2 + Math.sin(e.t * 0.5) * 90; e.y = 150 + Math.sin(e.t * 1.1) * 15; },
-  pods(e) { const a = e.t * 1.4; return [[e.x + Math.cos(a) * 70, e.y + Math.sin(a) * 40], [e.x - Math.cos(a) * 70, e.y - Math.sin(a) * 40]]; },
+  pods(e) { const a = e.t * 1.4, s = (e.fscale || 1) * (e.form >= 2 ? 1.25 : 1); return [[e.x + Math.cos(a) * 70 * s, e.y + Math.sin(a) * 40 * s], [e.x - Math.cos(a) * 70 * s, e.y - Math.sin(a) * 40 * s]]; },
   fire(e, dt) {
     const pd = MID5.pods(e);
     if (every(e, 'a', 0.14, dt)) { e.spin += 0.31; for (let i = 0; i < 2; i++) eShot(pd[i][0], pd[i][1], e.spin + i * Math.PI, 130, false, 'rice'); }
-    if (e.hp > e.maxHp * 0.5) {   // 前半：七向扇形 + 環形
+    if (e.form < 2) {   // 前半：七向扇形 + 環形
       if (every(e, 'b', 1.8, dt)) fan(e.x, e.y + 30, 7, 175, 0.15, true);
       if (every(e, 'c', 3.6, dt)) ring(e.x, e.y, 20, 105, e.t);
     } else {                      // 後半：花瓣彈 + 彈牆 + 雷射
       if (every(e, 'fl', 2.6, dt)) flower(e.x, e.y, 12, 2, e.t);
       if (every(e, 'w', 4.0, dt)) wallGap(e.y + 50, player.x + rand(-70, 70), 86, 92);
       if (every(e, 'bm', 5.0, dt)) beam(clamp(player.x, 30, W - 30), e.y + 40, 30, 1.1, 0.9);
+      if (every(e, 'tp', 0.16, dt)) { e.sp2 = (e.sp2 || 0) + 0.37; for (const [x, y] of midTips(e)) eShot(x, y, e.sp2, 120, false, 'rice'); }
     }
   },
   draw(e) {
@@ -3496,7 +3598,7 @@ const MID5 = { name: 'TWIN ORBITER', hp: 900, r: 44, size: 70, stopY: 150, enter
     circ(0, 0, 18, '#2a1a34'); circ(0, 0, 11, FLASH ? '#fff' : '#ff60c0');
     if (!SHADOW) {
       const a = e.t * 1.4;
-      for (const s of [1, -1]) { const px = s * Math.cos(a) * 70, py = s * Math.sin(a) * 40; circ(px, py, 14, '#5a4a6a'); circ(px, py, 7, '#80f0ff'); }
+      const os = e.form >= 2 ? 1.25 : 1; for (const s of [1, -1]) { const px = s * Math.cos(a) * 70 * os, py = s * Math.sin(a) * 40 * os; circ(px, py, 14, '#5a4a6a'); circ(px, py, 7, '#80f0ff'); }
       ctx.strokeStyle = 'rgba(160,120,220,0.35)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.ellipse(0, 0, 70, 40, 0, 0, TAU); ctx.stroke();
     }
   } };
@@ -3514,8 +3616,11 @@ const BOSS1 = { name: 'FLYING FORTRESS', enterY: 150, enterSpd: 55, y0: -170, w:
     { name: 'w2', ox: 168, oy: -6, hp: 90, r: 14, kind: 'turret', score: 4000, hidden: true, appear: 2 },
     { name: 'core', ox: 0, oy: 12, hp: 700, r: 25, kind: 'core', score: 50000, size: 50 }],
   /* 形態1：裝甲要塞 → 形態2：裝甲板炸飛、後掠翼展開（翼端新砲塔）、機體放大 */
-  scale: [1, 1, 1.1], morph: { 2: { scale: 1.1 } },
-  plates: { 1: [[-48, -40, 36, 22], [12, -40, 36, 22], [-138, -6, 44, 20], [94, -6, 44, 20], [-36, 52, 72, 14]] },
+  /* 形態3（暴走，核心 30%）：內層裝甲炸飛、尾翼刀刃展開、核心尖刺冠、機體再放大 */
+  scale: [1, 1, 1.1, 1.2], morph: { 2: { scale: 1.1 }, 3: { scale: 1.2 } },
+  plates: { 1: [[-48, -40, 36, 22], [12, -40, 36, 22], [-138, -6, 44, 20], [94, -6, 44, 20], [-36, 52, 72, 14]], 2: [[-60, -74, 120, 12], [-104, 44, 40, 12], [64, 44, 40, 12]] },
+  wings3: { x0: 70, y0: 70, pts: [0, -8, 40, 6, 58, 30, 24, 22, 0, 12], inner: [4, -3, 36, 8, 48, 24, 22, 16, 4, 7], col: '#4a2020', edge: '#ff4030' },
+  spikes: { n: 6, r0: 30, len: 26, col: '#5a2020', edge: '#ff5030' },
   wings: { x0: 138, y0: 0, pts: [0, -18, 40, -34, 62, -30, 48, 6, 30, 22, 0, 26], inner: [6, -12, 38, -26, 52, -22, 40, 4, 6, 18], col: '#5a606c', edge: '#e0a040' },
   vents: [[-110, 40], [110, 40], [0, -60]],
   armor: (b) => !!(BP(b, 'lc') || BP(b, 'rc')),
@@ -3569,8 +3674,11 @@ const BOSS2 = { name: 'DESERT WALKER', ground: true, enterY: 165, enterSpd: 95, 
     { name: 'm2', ox: 150, oy: -14, hp: 110, r: 15, kind: 'pod', score: 5000, size: 26, fixed: true, hidden: true, appear: 2 },
     { name: 'core', ox: 0, oy: 4, hp: 750, r: 26, kind: 'core', score: 50000, size: 50, f: { 2: [0, 0] } }],
   /* 形態1：重裝甲步行者 → 形態2：裝甲剝落、機體升高、側臂展開迫擊砲 */
-  scale: [1, 1, 1.14], morph: { 2: { scale: 1.14 } },
-  plates: { 1: [[-58, -40, 34, 22], [24, -40, 34, 22], [-40, 26, 80, 16], [-120, 0, 40, 18], [80, 0, 40, 18]] },
+  /* 形態3（暴走）：胸甲炸飛、背部刀腳展開、核心尖刺冠、機體再升高 */
+  scale: [1, 1, 1.14, 1.24], morph: { 2: { scale: 1.14 }, 3: { scale: 1.24 } },
+  plates: { 1: [[-58, -40, 34, 22], [24, -40, 34, 22], [-40, 26, 80, 16], [-120, 0, 40, 18], [80, 0, 40, 18]], 2: [[-44, -26, 88, 14], [-30, 40, 60, 12]] },
+  wings3: { x0: 60, y0: -66, pts: [0, -6, 34, -34, 44, -30, 18, 6, 0, 8], inner: [4, -3, 32, -26, 38, -24, 16, 2, 4, 4], col: '#5a3a20', edge: '#ff6030' },
+  spikes: { n: 6, r0: 30, len: 26, col: '#6a4020', edge: '#ff8030' },
   wings: { x0: 112, y0: -14, pts: [0, -10, 30, -26, 46, -20, 50, 4, 30, 14, 0, 10], inner: [6, -6, 30, -18, 40, -12, 42, 2, 6, 4], col: '#7a5a34', edge: '#c09050' },
   vents: [[-30, -30], [30, -30], [0, 44]],
   armor: (b) => !!(BP(b, 'lc') || BP(b, 'rc')),
@@ -3627,8 +3735,11 @@ const BOSS3 = { name: 'IRON FORTRESS', ground: true, enterY: 130, enterSpd: 85, 
     { name: 'lz', ox: 0, oy: 50, hp: 220, r: 16, kind: 'emitter', score: 8000, size: 30, fixed: true, hidden: true, appear: 2 },
     { name: 'core', ox: 0, oy: -6, hp: 850, r: 28, kind: 'core', score: 60000, size: 54, f: { 2: [0, -16] } }],
   /* 形態1：封閉要塞 → 形態2：中央裝甲左右裂開、升起雷射主砲、砲塔外移 */
-  scale: [1, 1, 1.06], morph: { 2: { scale: 1.06 } },
-  plates: { 1: [[-50, -30, 48, 70], [2, -30, 48, 70], [-150, -60, 50, 20], [100, -60, 50, 20]] },
+  /* 形態3（暴走）：屋頂裝甲炸飛、前方刀刃砲架展開、核心尖刺冠 */
+  scale: [1, 1, 1.06, 1.12], morph: { 2: { scale: 1.06 }, 3: { scale: 1.12 } },
+  plates: { 1: [[-50, -30, 48, 70], [2, -30, 48, 70], [-150, -60, 50, 20], [100, -60, 50, 20]], 2: [[-112, -84, 60, 14], [52, -84, 60, 14], [-26, -50, 52, 12]] },
+  wings3: { x0: 90, y0: 60, pts: [0, -6, 30, 4, 46, 34, 16, 24, 0, 12], inner: [4, -2, 26, 6, 38, 28, 14, 18, 4, 8], col: '#3a3e48', edge: '#ff3030' },
+  spikes: { n: 7, r0: 32, len: 28, col: '#3a3e48', edge: '#ff4030' },
   wings: { x0: 200, y0: 10, pts: [0, -30, 28, -40, 36, -10, 30, 30, 0, 26], inner: [4, -24, 24, -32, 30, -8, 24, 22, 4, 20], col: '#4a4e58', edge: '#ff6040' },
   vents: [[-90, -40], [90, -40], [-40, 30], [40, 30]],
   armor: (b) => !!(BP(b, 'lc') || BP(b, 'rc')),
@@ -3680,8 +3791,11 @@ const BOSS4 = { name: 'BATTLESHIP LEVIATHAN', ground: true, noDecal: true, enter
     { name: 'p2', ox: 96, oy: 0, hp: 120, r: 15, kind: 'pod', score: 5000, size: 26, fixed: true, hidden: true, appear: 2 },
     { name: 'core', ox: 0, oy: -4, hp: 900, r: 24, kind: 'core', score: 60000, size: 54 }],
   /* 形態1：戰艦 → 形態2：側舷裝甲炸開、左右展開飛彈甲板翼 */
-  scale: [1, 1, 1.08], morph: { 2: { scale: 1.08 } },
-  plates: { 1: [[-48, -40, 18, 70], [30, -40, 18, 70], [-30, -130, 60, 18], [-30, 112, 60, 18]] },
+  /* 形態3（暴走）：艦橋裝甲炸飛、艦首衝角鰭展開、核心尖刺冠 */
+  scale: [1, 1, 1.08, 1.16], morph: { 2: { scale: 1.08 }, 3: { scale: 1.16 } },
+  plates: { 1: [[-48, -40, 18, 70], [30, -40, 18, 70], [-30, -130, 60, 18], [-30, 112, 60, 18]], 2: [[-22, -84, 44, 14], [-22, 68, 44, 14]] },
+  wings3: { x0: 26, y0: -110, pts: [0, -6, 30, -30, 40, -24, 20, 10, 0, 12], inner: [4, -2, 28, -22, 34, -18, 18, 6, 4, 6], col: '#3a4454', edge: '#ff5050' },
+  spikes: { n: 6, r0: 28, len: 24, col: '#3a4454', edge: '#ff5050' },
   wings: { x0: 44, y0: 0, pts: [0, -34, 52, -26, 68, -6, 68, 10, 52, 26, 0, 34], inner: [6, -24, 46, -18, 58, -4, 58, 6, 46, 18, 6, 24], col: '#4a5464', edge: '#8aa0c0' },
   vents: [[0, -60], [0, 40]],
   armor: (b) => !!(BP(b, 'm1') || BP(b, 'm3')),
@@ -3733,8 +3847,10 @@ const BOSS5 = { name: 'CRIMSON MOTHERSHIP', final: true, enterY: 165, enterSpd: 
     { name: 'h2', ox: 40, oy: 70, hp: 150, r: 14, kind: 'pod', score: 6000, size: 26, hidden: true, appear: 3, fixed: true },
     { name: 'core', ox: 0, oy: -6, hp: 1300, r: 30, kind: 'core', score: 100000, size: 60, f: { 3: [0, 0] } }],
   /* 形態1：重裝母艦 → 形態2：外殼剝落、能量臂展開 → 形態3：核心暴走、尖刺冠展開、機體巨大化 */
-  scale: [1, 1, 1.08, 1.16], morph: { 2: { scale: 1.08 }, 3: { scale: 1.16, dur: 1.6 } },
-  plates: { 1: [[-110, -40, 50, 26], [60, -40, 50, 26], [-60, 40, 120, 18], [-160, -10, 30, 40], [130, -10, 30, 40]], 2: [[-44, -70, 88, 16], [-90, 52, 40, 14], [50, 52, 40, 14]] },
+  /* 形態4（核心 15%）：最終裝甲炸飛、金色外圈尖刺反轉、尾翼展開、機體最大化 */
+  lastForm: 4, scale: [1, 1, 1.08, 1.16, 1.24], morph: { 2: { scale: 1.08 }, 3: { scale: 1.16 }, 4: { scale: 1.24, dur: 1.6 } },
+  wings4: { x0: 90, y0: 80, pts: [0, -8, 44, 10, 60, 44, 24, 30, 0, 14], inner: [4, -3, 40, 12, 50, 36, 22, 24, 4, 9], col: '#4a1a40', edge: '#ffd040' },
+  plates: { 1: [[-110, -40, 50, 26], [60, -40, 50, 26], [-60, 40, 120, 18], [-160, -10, 30, 40], [130, -10, 30, 40]], 2: [[-44, -70, 88, 16], [-90, 52, 40, 14], [50, 52, 40, 14]], 3: [[-70, -50, 40, 12], [30, -50, 40, 12], [-20, 40, 40, 12]] },
   wings: { x0: 150, y0: 10, pts: [0, -24, 50, -60, 70, -54, 44, 0, 70, 40, 50, 46, 0, 26], inner: [8, -16, 46, -46, 56, -42, 34, 0, 56, 32, 46, 34, 8, 18], col: '#5a2a6a', edge: '#ff60c0' },
   spikes: { n: 8, r0: 36, len: 34, col: '#5a2a70', edge: '#ff3070' },
   vents: [[-120, 40], [120, 40], [-60, -50], [60, -50], [0, 70]],
@@ -3742,6 +3858,7 @@ const BOSS5 = { name: 'CRIMSON MOTHERSHIP', final: true, enterY: 165, enterSpd: 
   armor: (b) => (b.phase <= 1 && !!(BP(b, 'lw') || BP(b, 'rw'))) || (b.phase === 2 && !!(BP(b, 'e1') || BP(b, 'e2'))),
   toP2: (b) => (!BP(b, 'lw') && !BP(b, 'rw')) || b.core.hp < b.core.maxHp * 0.7,
   toP3: (b) => (b.form >= 2 && !BP(b, 'e1') && !BP(b, 'e2')) || b.core.hp < b.core.maxHp * 0.35,
+  toP4: (b) => b.core.hp < b.core.maxHp * 0.15,
   move(b, dt) { const a = b.phase >= 3 ? 110 : b.phase === 2 ? 90 : 60; b.x = W / 2 + Math.sin(b.t * 0.33) * a; b.y = 165 + Math.sin(b.t * 0.8) * 14; },
   fire(b, dt) {
     const c = b.core;
@@ -3757,6 +3874,11 @@ const BOSS5 = { name: 'CRIMSON MOTHERSHIP', final: true, enterY: 165, enterSpd: 
       if (every(b, 'bm', 5.0, dt)) beam(clamp(player.x, 30, W - 30), c.y + 30, 36, 1.1, 1.2);
       if (every(b, 'w', 5.5, dt)) wallGap(c.y + 60, player.x + rand(-70, 70), 84, 92);
       if (!e1 && !e2 && every(b, 'r', 2.0, dt)) ring(c.x, c.y, 18, 125, Math.random());
+    } else if (b.phase >= 4) {                            // 形態4：反向雙螺旋 + 三層花瓣 + 追瞄雷射 + 加速環
+      if (every(b, 's', 0.1, dt)) { spiralShots(b, c.x, c.y, 4, 120, 0.19, 'sp'); spiralShots(b, c.x, c.y, 3, 105, -0.15, 'sp2', 'ring'); }
+      if (every(b, 'fl', 2.2, dt)) flower(c.x, c.y, 12, 3, Math.random());
+      if (every(b, 'bm', 3.8, dt)) beam(clamp(player.x, 30, W - 30), c.y + 30, 34, 1.0, 0.9);
+      if (every(b, 'ac', 3.0, dt)) accelRing(c.x, c.y, 20, Math.random(), 40, 210);
     } else {                                              // 形態3：花瓣彈 + 加速環 + 雙光束 + 尖刺砲彈 + 五臂螺旋
       if (every(b, 's', 0.11, dt)) spiralShots(b, c.x, c.y + 10, 5, 125, 0.16, 'sp');
       if (every(b, 'fl', 2.4, dt)) flower(c.x, c.y, 14, 2, Math.random());
@@ -3841,7 +3963,7 @@ const TL1 = [
   [83, () => { turret(160, -30); turret(320, -30); tank(W + 20, 50, Math.PI - 0.3, 50); }],
   [86, () => lineDown(240, 6)],
   // 中BOSS
-  [90, () => { midboss(); }],
+  [90, () => { spawnMid(MID1); }],
   [96, () => { tank(-20, 40, 0.2, 40); }],
   [104, () => { tank(W + 20, 40, Math.PI - 0.2, 40); }],
   [112, () => { turret(80, -30); }],
@@ -4072,6 +4194,8 @@ function newGame(stage, startT) {
   if (startT > 0 || stage > 1) { player.level = startT > 0 ? 4 : 3; player.missile = 'H'; player.mlevel = 2; } // 除錯：中等火力
   if (WCOL.indexOf(PARAMS.get('weapon')) >= 0) player.weapon = PARAMS.get('weapon');
   if (PARAMS.get('level')) player.level = clamp(+PARAMS.get('level') | 0, 1, 5);
+  if (PARAMS.get('sub') === 'H' || PARAMS.get('sub') === 'N') player.missile = PARAMS.get('sub');
+  if (PARAMS.get('mlevel')) { if (!player.missile) player.missile = 'H'; player.mlevel = clamp(+PARAMS.get('mlevel') | 0, 1, player.missile === 'H' ? 5 : 4); }
   resetHud(true);
 }
 function startGame() { newGame(START_STAGE, DEBUG_T); setState('play'); MUSIC.play(G.bossMode ? (G.stage === 5 ? 'boss5' : 'boss') : STAGES[G.stage].music); SFX.play('start'); }
@@ -4327,7 +4451,7 @@ function drawHUD() {
     const wn = WNAME[p.weapon], wc = { red: '#ff7050', blue: '#50b8ff', purple: '#c080ff' }[p.weapon];
     const wcol = hud.weapFlash > 0 ? '#fff' : wc;
     txt(wn + ' Lv' + p.level, W / 2 - 8, H - 12, 13, wcol, 'right');
-    if (p.missile) txt((p.missile === 'H' ? 'HOMING' : 'MISSILE') + ' Lv' + p.mlevel, W / 2 + 8, H - 12, 13, p.missile === 'H' ? '#80e080' : '#e8d050', 'left');
+    if (p.missile) txt((p.missile === 'H' ? 'HOMING' : 'MISSILE') + ' Lv' + p.mlevel + (p.missile === 'H' && p.mlevel >= 5 ? ' MAX' : ''), W / 2 + 8, H - 12, 13, p.missile === 'H' ? '#80e080' : '#e8d050', 'left');
     const fill = hud.levelFill;
     for (let i = 0; i < 5; i++) {
       const x = W / 2 - 66 + i * 12, y = H - 30;
