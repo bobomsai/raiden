@@ -1888,12 +1888,182 @@ const PLAYER_SHIP_MAP =
   '00000000000000000000000000000000' +
   '00000000000000000000000000000000';
 
-function buildPlayerShipCanvas() {
+/* ship11_stealth 滾轉影格：與 PLAYER_SHIP_MAP 相同格式（32x32，索引對應 PLAYER_SHIP_PAL） */
+/* 順序：L2(左滾2) L1(左滾1) C(置中) R1(右滾1) R2(右滾2) */
+const PLAYER_SHIP_BANK_MAPS = {
+  L2:
+    '00000000000000000000000000000000' +
+    '00000000000000110000000000000000' +
+    '00000000000001221000000000000000' +
+    '00000000000013223100000000000000' +
+    '00000000000013223410000000000000' +
+    '00000000000013223451000000000000' +
+    '00000000000154774361000000000000' +
+    '00000000001584994368100000000000' +
+    '00000000001567997426100000000000' +
+    '00000000000017777421000000000000' +
+    '00000000000014bb4a21000000000000' +
+    '00000000001844bb4a22510000000000' +
+    '00000000158444bb4a42285100000000' +
+    '0000000018a444bb4a42228510000000' +
+    '0000000018a444bb4a42228510000000' +
+    '0000000018a444bb4a42228510000000' +
+    '00000000156444bb4a42265100000000' +
+    '00000000015444bb4a42551000000000' +
+    '0000000000156bbbba46100000000000' +
+    '0000000000015abbaa61000000000000' +
+    '0000000000001aaaa651000000000000' +
+    '000000000001caaaadd1000000000000' +
+    '0000000000d1eddddee1000000000000' +
+    '00000000000e1feeffe1000000000000' +
+    '0000000000001feeff10000000000000' +
+    '0000000000001feef100000000000000' +
+    '00000000000001ee1000000000000000' +
+    '00000000000000ee0000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000',
+  L1:
+    '00000000000000000000000000000000' +
+    '00000000000000011000000000000000' +
+    '00000000000000122100000000000000' +
+    '00000000000001322310000000000000' +
+    '00000000000014322310000000000000' +
+    '00000000000154322341000000000000' +
+    '00000000001563477435100000000000' +
+    '00000000001863499438510000000000' +
+    '00000000001634799746510000000000' +
+    '00000000000134777741000000000000' +
+    '0000000000013a4bb4a1000000000000' +
+    '0000000001533a4bb4a3851000000000' +
+    '000000015843aa4bb4a3338510000000' +
+    '000000158443aa4bb4a3333851000000' +
+    '000000158443aa4bb4a3333851000000' +
+    '000000158443aa4bb4a3333851000000' +
+    '000000015643aa4bb4a3336510000000' +
+    '000000001553aa4bb4a3355100000000' +
+    '000000000016aabbbba6510000000000' +
+    '0000000000156aabbaa5100000000000' +
+    '00000000000156aaaa61000000000000' +
+    '00000000001cddaaaadd100000000000' +
+    '00000000001deeddddee100000000000' +
+    '000000000001effeeff1000000000000' +
+    '0000000000001ffeef10000000000000' +
+    '00000000000001feef10000000000000' +
+    '000000000000001ee100000000000000' +
+    '000000000000000ee000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000',
+  C:
+    '00000000000000000000000000000000' +
+    '00000000000000011000000000000000' +
+    '00000000000000122100000000000000' +
+    '00000000000001322310000000000000' +
+    '00000000000014322341000000000000' +
+    '00000000000154322345100000000000' +
+    '00000000001563477436510000000000' +
+    '00000000015863499436851000000000' +
+    '00000000015634799743651000000000' +
+    '00000000000134777743100000000000' +
+    '0000000000013a4bb4a3100000000000' +
+    '0000000015833a4bb4a3385100000000' +
+    '000000158333aa4bb4aa333851000000' +
+    '000001583333aa4bb4aa333385100000' +
+    '000001583333aa4bb4aa333385100000' +
+    '000001583333aa4bb4aa333385100000' +
+    '000000156333aa4bb4aa333651000000' +
+    '000000015533aa4bb4aa335510000000' +
+    '000000000156aabbbbaa651000000000' +
+    '0000000000156aabbaa6510000000000' +
+    '00000000000156aaaa65100000000000' +
+    '00000000001cddaaaaddc10000000000' +
+    '00000000001deeddddeed10000000000' +
+    '000000000001effeeffe100000000000' +
+    '0000000000001ffeeff1000000000000' +
+    '00000000000001feef10000000000000' +
+    '000000000000001ee100000000000000' +
+    '000000000000000ee000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000',
+  R1:
+    '00000000000000000000000000000000' +
+    '00000000000000011000000000000000' +
+    '00000000000000122100000000000000' +
+    '00000000000001322310000000000000' +
+    '00000000000001322341000000000000' +
+    '00000000000014322345100000000000' +
+    '00000000000153477436510000000000' +
+    '00000000001583499436810000000000' +
+    '00000000001564799743610000000000' +
+    '00000000000014777743100000000000' +
+    '0000000000001a4bb4a3100000000000' +
+    '0000000001583a4bb4a3351000000000' +
+    '0000000158333a4bb4aa348510000000' +
+    '0000001583333a4bb4aa344851000000' +
+    '0000001583333a4bb4aa344851000000' +
+    '0000001583333a4bb4aa344851000000' +
+    '0000000156333a4bb4aa346510000000' +
+    '0000000015533a4bb4aa355100000000' +
+    '0000000000156abbbbaa610000000000' +
+    '0000000000015aabbaa6510000000000' +
+    '00000000000016aaaa65100000000000' +
+    '000000000001ddaaaaddc10000000000' +
+    '000000000001eeddddeed10000000000' +
+    '0000000000001ffeeffe100000000000' +
+    '00000000000001feeff1000000000000' +
+    '00000000000001feef10000000000000' +
+    '000000000000001ee100000000000000' +
+    '000000000000000ee000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000',
+  R2:
+    '00000000000000000000000000000000' +
+    '00000000000000001100000000000000' +
+    '00000000000000012210000000000000' +
+    '00000000000000132231000000000000' +
+    '00000000000001432231000000000000' +
+    '00000000000015432231000000000000' +
+    '00000000000016347745100000000000' +
+    '00000000000186349948510000000000' +
+    '00000000000162479976510000000000' +
+    '00000000000012477771000000000000' +
+    '00000000000012a4bb41000000000000' +
+    '00000000001522a4bb44810000000000' +
+    '00000000158224a4bb44485100000000' +
+    '00000001582224a4bb444a8100000000' +
+    '00000001582224a4bb444a8100000000' +
+    '00000001582224a4bb444a8100000000' +
+    '00000000156224a4bb44465100000000' +
+    '00000000015524a4bb44451000000000' +
+    '00000000000164abbbb6510000000000' +
+    '00000000000016aabba5100000000000' +
+    '000000000000156aaaa1000000000000' +
+    '0000000000001ddaaaac100000000000' +
+    '0000000000001eedddde1d0000000000' +
+    '0000000000001effeef1e00000000000' +
+    '00000000000001ffeef1000000000000' +
+    '000000000000001feef1000000000000' +
+    '0000000000000001ee10000000000000' +
+    '0000000000000000ee00000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000' +
+    '00000000000000000000000000000000',
+};
+
+function buildPlayerShipCanvas(mapOverride) {
   const c = document.createElement('canvas');
   c.width = PLAYER_SHIP_W; c.height = PLAYER_SHIP_H;
   const g = c.getContext('2d');
   const id = g.createImageData(PLAYER_SHIP_W, PLAYER_SHIP_H);
-  const d = id.data, map = PLAYER_SHIP_MAP, pal = PLAYER_SHIP_PAL;
+  const d = id.data, map = mapOverride || PLAYER_SHIP_MAP, pal = PLAYER_SHIP_PAL;
   for (let i = 0; i < 1024; i++) {
     const k = parseInt(map[i], 16);
     if (!k) continue;
@@ -1914,31 +2084,48 @@ function tintPlayerShip(src, tint) {
   g.fillRect(0, 0, PLAYER_SHIP_W, PLAYER_SHIP_H);
   return c;
 }
-const playerShipGfx = { normal: null, shadow: null, flash: null };
+const playerShipGfx = { normal: null, shadow: null, flash: null, frames: {} };
 (function initPlayerShipGfx() {
   const src = buildPlayerShipCanvas();
   playerShipGfx.normal = src;
   playerShipGfx.shadow = tintPlayerShip(src, 'rgba(0,0,0,0.28)');
   playerShipGfx.flash = tintPlayerShip(src, '#ffffff');
+  /* 左右微滾轉影格 L2 L1 C R1 R2 */
+  for (const k of ['L2', 'L1', 'C', 'R1', 'R2']) {
+    const c = k === 'C' ? src : buildPlayerShipCanvas(PLAYER_SHIP_BANK_MAPS[k]);
+    playerShipGfx.frames[k] = { normal: c, shadow: tintPlayerShip(c, 'rgba(0,0,0,0.28)'), flash: tintPlayerShip(c, '#ffffff') };
+  }
 })();
+/* 依滾轉量選影格（帶遲滯，避免在門檻附近閃爍） */
+function bankFrame(p) {
+  const b = p.bank, a = Math.abs(b), cur = p.bankLv || 0;
+  let lv = cur;
+  if (cur === 0) { if (a > 0.25) lv = 1; }
+  else if (cur === 1) { if (a > 0.64) lv = 2; else if (a < 0.16) lv = 0; }
+  else if (a < 0.52) lv = 1;
+  p.bankLv = lv;
+  return lv === 0 ? 'C' : (b > 0 ? 'R' : 'L') + lv;
+}
 
-function drawPlayerShape(bank, flame) {
+function drawPlayerShape(bank, flame, fk) {
   ctx.save();
-  ctx.scale(1 - Math.abs(bank) * 0.28, 1);
-  const S = PLAYER_SHIP_SCALE;
+  fk = fk || (Math.abs(bank) > 0.62 ? (bank > 0 ? 'R2' : 'L2') : Math.abs(bank) > 0.22 ? (bank > 0 ? 'R1' : 'L1') : 'C');
+  const S = PLAYER_SHIP_SCALE, lv = fk === 'C' ? 0 : +fk[1], sg = fk[0] === 'R' ? 1 : fk[0] === 'L' ? -1 : 0;
   const fy = (23 - PLAYER_SHIP_CY) * S;
   if (flame && !SHADOW) {
-    /* 雙噴口藍白尾焰，對齊精靈圖的 twin exhaust */
-    for (const ox of [-4.2, 4.2]) {
-      const fl = 6 + Math.random() * 8;
+    /* 雙噴口藍白尾焰：跟著機身往滾轉方向偏，尾端往反方向拖 */
+    const bx = sg * lv * 0.5 * S, tail = -sg * lv * 1.6, gap = 4.2 * (1 - lv * 0.08);
+    for (const ox0 of [-gap, gap]) {
+      const ox = ox0 + bx, fl = 6 + Math.random() * 8;
       ctx.fillStyle = 'rgba(80,160,255,0.95)';
-      ctx.beginPath(); ctx.moveTo(ox - 2.4, fy); ctx.lineTo(ox, fy + 3 + fl); ctx.lineTo(ox + 2.4, fy); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(ox - 2.4, fy); ctx.lineTo(ox + tail, fy + 3 + fl); ctx.lineTo(ox + 2.4, fy); ctx.fill();
       ctx.fillStyle = 'rgba(220,240,255,0.95)';
-      ctx.beginPath(); ctx.moveTo(ox - 1.1, fy + 1); ctx.lineTo(ox, fy + 2 + fl * 0.62); ctx.lineTo(ox + 1.1, fy + 1); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(ox - 1.1, fy + 1); ctx.lineTo(ox + tail * 0.6, fy + 2 + fl * 0.62); ctx.lineTo(ox + 1.1, fy + 1); ctx.fill();
     }
   }
   ctx.imageSmoothingEnabled = false;
-  const img = SHADOW ? playerShipGfx.shadow : (FLASH ? playerShipGfx.flash : playerShipGfx.normal);
+  const G2 = playerShipGfx.frames[fk] || playerShipGfx;
+  const img = SHADOW ? G2.shadow : (FLASH ? G2.flash : G2.normal);
   ctx.drawImage(img, -PLAYER_SHIP_CX * S, -PLAYER_SHIP_CY * S, PLAYER_SHIP_W * S, PLAYER_SHIP_H * S);
   ctx.restore();
 }
@@ -1946,8 +2133,9 @@ function drawPlayer() {
   const p = player;
   if (!p.alive) return;
   if (p.inv > 0 && Math.floor(p.inv * 15) % 2 === 0) return;
-  withShadow(() => { ctx.translate(p.x, p.y); drawPlayerShape(p.bank, false); }, 18, 34, 0.75);
-  ctx.save(); ctx.translate(p.x, p.y); drawPlayerShape(p.bank, true); ctx.restore();
+  const fk = bankFrame(p);
+  withShadow(() => { ctx.translate(p.x, p.y); drawPlayerShape(p.bank, false, fk); }, 18, 34, 0.75);
+  ctx.save(); ctx.translate(p.x, p.y); drawPlayerShape(p.bank, true, fk); ctx.restore();
   // 判定點
   ctx.fillStyle = 'rgba(255,60,60,0.9)'; ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, TAU); ctx.fill();
   ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(p.x, p.y, 1.2, 0, TAU); ctx.fill();
@@ -1994,7 +2182,10 @@ function updatePlayer(dt) {
   touch.dx = touch.dy = 0;
   p.x = clamp(p.x, 18, W - 18); p.y = clamp(p.y, 30, H - 26);
   const vx = (p.x - ox) / dt;
-  p.bank = lerp(p.bank, clamp(vx / 235, -1, 1), Math.min(1, dt * 10));
+  // 觸控拖曳每幀位移不穩定，先平滑速度，再緩動進入／回正滾轉
+  p.svx = lerp(p.svx || 0, vx, Math.min(1, dt * 14));
+  p.bank = lerp(p.bank, clamp(p.svx / 200, -1, 1), Math.min(1, dt * 7));
+  if (Math.abs(p.bank) < 0.01) p.bank = 0;
   if (p.inv > 0) p.inv -= dt;
   if (keys.KeyZ || keys.Space || keys.KeyJ || touch.active || G.autoFire) playerFire(dt);
   if (hit('KeyX', 'KeyK') || touch.bomb) useBomb();
