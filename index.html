@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>雷電風格 縱向射擊 — 5 STAGES</title>
+<title>王博博@雷電</title>
 <style>
   html, body { margin: 0; height: 100%; background: #05070d; overflow: hidden; overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   body { display: flex; align-items: center; justify-content: center; }
@@ -4702,11 +4702,13 @@ function drawTitle(dt) {
   ctx.translate(W / 2, 165);
   const g = ctx.createLinearGradient(0, -60, 0, 20);
   g.addColorStop(0, '#fff8c0'); g.addColorStop(0.5, '#ffb020'); g.addColorStop(1, '#c02010');
-  ctx.font = 'bold 92px "Noto Sans CJK TC","Noto Serif CJK TC","Microsoft JhengHei","PingFang TC",sans-serif';
+  const TT = '王博博@雷電', TF = '"Noto Sans CJK TC","Noto Serif CJK TC","Microsoft JhengHei","PingFang TC",sans-serif';
+  let tfs = 92; ctx.font = 'bold ' + tfs + 'px ' + TF;
+  const tw = ctx.measureText(TT).width; if (tw > W * 0.92) { tfs = Math.floor(tfs * W * 0.92 / tw); ctx.font = 'bold ' + tfs + 'px ' + TF; }
   ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillText('雷電', 4, 4);
-  ctx.lineWidth = 6; ctx.strokeStyle = '#401008'; ctx.strokeText('雷電', 0, 0);
-  ctx.fillStyle = g; ctx.fillText('雷電', 0, 0);
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillText(TT, 4, 4);
+  ctx.lineWidth = 6; ctx.strokeStyle = '#401008'; ctx.strokeText(TT, 0, 0);
+  ctx.fillStyle = g; ctx.fillText(TT, 0, 0);
   ctx.restore();
   txt('R A I D E N  S T Y L E', W / 2, 205, 20, '#9fd8ff');
   txt('- 5 STAGES -', W / 2, 232, 16, '#ffffff');
